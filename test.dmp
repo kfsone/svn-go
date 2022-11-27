@@ -1,0 +1,45 @@
+SVN-fs-dump-format-version: 2
+
+UUID: 7f04c085-c1d1-7841-8030-78bbba748af5
+
+Revision-number: 0
+Prop-content-length: 56
+Content-length: 56
+
+K 8
+svn:date
+V 27
+2022-11-17T01:13:16.778834Z
+PROPS-END
+
+Revision-number: 1
+Prop-content-length: 122
+Content-length: 122
+
+K 10
+svn:author
+V 12
+oliver.smith
+K 8
+svn:date
+V 27
+2022-11-17T01:13:43.306423Z
+K 7
+svn:log
+V 14
+Copyright file
+PROPS-END
+
+Node-path: Copyright.txt
+Node-kind: file
+Node-action: add
+Text-content-md5: 655502d8740d2cae11e708edb6fb2795
+Text-content-sha1: 638b1fe487c4a139c1a77e13736dbc4729dffcfa
+Prop-content-length: 10
+Text-content-length: 16
+Content-length: 26
+
+PROPS-END
+Not copyright.
+
+
