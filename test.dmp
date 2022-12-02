@@ -43,3 +43,354 @@ PROPS-END
 Not copyright.
 
 
+Revision-number: 2
+Prop-content-length: 124
+Content-length: 124
+
+K 10
+svn:author
+V 12
+oliver.smith
+K 8
+svn:date
+V 27
+2022-11-28T04:18:30.893074Z
+K 7
+svn:log
+V 16
+Add sample files
+PROPS-END
+
+Node-path: Dir1
+Node-kind: dir
+Node-action: add
+Prop-content-length: 10
+Content-length: 10
+
+PROPS-END
+
+
+Node-path: Dir1/Source.cpp
+Node-kind: file
+Node-action: add
+Text-content-md5: 83674024b5e22a9cc65f7d0cfcee0d08
+Text-content-sha1: 4a2d312355b4fee3913c07b16132d58fdfca6d4c
+Prop-content-length: 10
+Text-content-length: 23
+Content-length: 33
+
+PROPS-END
+// Sample source file
+
+
+Node-path: Dir2
+Node-kind: dir
+Node-action: add
+Prop-content-length: 10
+Content-length: 10
+
+PROPS-END
+
+
+Node-path: Dir2/Readme.md
+Node-kind: file
+Node-action: add
+Text-content-md5: d8653be778beda83ad694981894af264
+Text-content-sha1: 4abe0286450c5030522927aa0a32d3f3e6e1cf25
+Prop-content-length: 10
+Text-content-length: 20
+Content-length: 30
+
+PROPS-END
+# Sample text file
+
+
+Node-path: Dir3
+Node-kind: dir
+Node-action: add
+Prop-content-length: 10
+Content-length: 10
+
+PROPS-END
+
+
+Node-path: Dir3/Source.py
+Node-kind: file
+Node-action: add
+Text-content-md5: cca626707947bc8a00243df9a521bfde
+Text-content-sha1: e8b42e804dc30377bce5950b8b76803b5bb3fec0
+Prop-content-length: 10
+Text-content-length: 17
+Content-length: 27
+
+PROPS-END
+# Sample script
+
+
+Revision-number: 3
+Prop-content-length: 112
+Content-length: 112
+
+K 10
+svn:author
+V 12
+oliver.smith
+K 8
+svn:date
+V 27
+2022-11-28T04:20:23.767350Z
+K 7
+svn:log
+V 5
+Reorg
+PROPS-END
+
+Node-path: Branches
+Node-kind: dir
+Node-action: add
+Prop-content-length: 10
+Content-length: 10
+
+PROPS-END
+
+
+Node-path: Tags
+Node-kind: dir
+Node-action: add
+Prop-content-length: 10
+Content-length: 10
+
+PROPS-END
+
+
+Node-path: Trunk
+Node-kind: dir
+Node-action: add
+Prop-content-length: 10
+Content-length: 10
+
+PROPS-END
+
+
+Node-path: Trunk/Copyright.txt
+Node-kind: file
+Node-action: add
+Node-copyfrom-rev: 2
+Node-copyfrom-path: Copyright.txt
+Text-copy-source-md5: 655502d8740d2cae11e708edb6fb2795
+Text-copy-source-sha1: 638b1fe487c4a139c1a77e13736dbc4729dffcfa
+Text-content-md5: bb1d7092380fdc6f503d2017e7fee1c4
+Text-content-sha1: 221b7dca8f95649184c084e3fe2adc26f4e81d42
+Text-content-length: 31
+Content-length: 31
+
+Not copyright.
+
+Version 1.0
+
+
+Node-path: Trunk/Dir1
+Node-kind: dir
+Node-action: add
+Node-copyfrom-rev: 2
+Node-copyfrom-path: Dir1
+
+
+Node-path: Trunk/Dir2
+Node-kind: dir
+Node-action: add
+Node-copyfrom-rev: 2
+Node-copyfrom-path: Dir2
+
+
+Node-path: Trunk/Dir3
+Node-kind: dir
+Node-action: add
+Node-copyfrom-rev: 2
+Node-copyfrom-path: Dir3
+
+
+Node-path: Copyright.txt
+Node-action: delete
+
+
+Node-path: Dir1
+Node-action: delete
+
+
+Node-path: Dir2
+Node-action: delete
+
+
+Node-path: Dir3
+Node-action: delete
+
+
+Revision-number: 4
+Prop-content-length: 111
+Content-length: 111
+
+K 10
+svn:author
+V 12
+oliver.smith
+K 8
+svn:date
+V 27
+2022-11-28T04:20:39.231364Z
+K 7
+svn:log
+V 4
+v1.1
+PROPS-END
+
+Node-path: Trunk/Copyright.txt
+Node-kind: file
+Node-action: change
+Text-content-md5: 1f4e4ac483da5d06180f36b4b1b04bbe
+Text-content-sha1: 01bd4e089754bafd6232affc787bad0decb73be6
+Text-content-length: 31
+Content-length: 31
+
+Not copyright.
+
+Version 1.1
+
+
+Revision-number: 5
+Prop-content-length: 118
+Content-length: 118
+
+K 10
+svn:author
+V 12
+oliver.smith
+K 8
+svn:date
+V 27
+2022-11-28T04:20:58.280568Z
+K 7
+svn:log
+V 10
+branch 1.1
+PROPS-END
+
+Node-path: Branches/Live_1.1
+Node-kind: dir
+Node-action: add
+Node-copyfrom-rev: 3
+Node-copyfrom-path: Trunk
+
+
+Node-path: Branches/Live_1.1/Copyright.txt
+Node-action: delete
+
+Node-path: Branches/Live_1.1/Copyright.txt
+Node-kind: file
+Node-action: add
+Node-copyfrom-rev: 4
+Node-copyfrom-path: Trunk/Copyright.txt
+Text-copy-source-md5: 1f4e4ac483da5d06180f36b4b1b04bbe
+Text-copy-source-sha1: 01bd4e089754bafd6232affc787bad0decb73be6
+
+
+Revision-number: 6
+Prop-content-length: 122
+Content-length: 122
+
+K 10
+svn:author
+V 12
+oliver.smith
+K 8
+svn:date
+V 27
+2022-11-28T04:21:28.739292Z
+K 7
+svn:log
+V 14
+add Source dir
+PROPS-END
+
+Node-path: Trunk/Dir1/Source
+Node-kind: dir
+Node-action: add
+Prop-content-length: 10
+Content-length: 10
+
+PROPS-END
+
+
+Node-path: Trunk/Dir1/Source/Source.cpp
+Node-kind: file
+Node-action: add
+Node-copyfrom-rev: 5
+Node-copyfrom-path: Trunk/Dir1/Source.cpp
+Text-copy-source-md5: 83674024b5e22a9cc65f7d0cfcee0d08
+Text-copy-source-sha1: 4a2d312355b4fee3913c07b16132d58fdfca6d4c
+
+
+Node-path: Trunk/Dir1/Source.cpp
+Node-action: delete
+
+
+Revision-number: 7
+Prop-content-length: 121
+Content-length: 121
+
+K 10
+svn:author
+V 12
+oliver.smith
+K 8
+svn:date
+V 27
+2022-11-28T04:22:08.839994Z
+K 7
+svn:log
+V 13
+Create Proj01
+PROPS-END
+
+Node-path: Proj01
+Node-kind: dir
+Node-action: add
+Prop-content-length: 10
+Content-length: 10
+
+PROPS-END
+
+
+Node-path: Proj01/Branches
+Node-kind: dir
+Node-action: add
+Node-copyfrom-rev: 6
+Node-copyfrom-path: Branches
+
+
+Node-path: Proj01/Tags
+Node-kind: dir
+Node-action: add
+Node-copyfrom-rev: 6
+Node-copyfrom-path: Tags
+
+
+Node-path: Proj01/Trunk
+Node-kind: dir
+Node-action: add
+Node-copyfrom-rev: 6
+Node-copyfrom-path: Trunk
+
+
+Node-path: Branches
+Node-action: delete
+
+
+Node-path: Tags
+Node-action: delete
+
+
+Node-path: Trunk
+Node-action: delete
+
+

@@ -3,3 +3,5 @@
 .idea
 *~
 *.bak
+/svn-go
+/svn-go.exe

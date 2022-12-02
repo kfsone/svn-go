@@ -1,47 +1,47 @@
 package svn
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 )
 
 type Properties map[string][]byte
 
-func NewProperties() Properties {
-	return Properties{}
-}
-
-func (r *Properties) Read(source []byte) (remainder []byte, crs int64, err error) {
-	for len(source) > 0 {
-		if bytes.HasPrefix(source, PropsEnd) {
-			source = source[len(PropsEnd):]
-			if bytes.HasPrefix(source, []byte{'\r'}) {
-				crs++
-				source = source[1:]
-			}
-			if bytes.HasPrefix(source, []byte{'\n'}) {
-				source = source[1:]
-			}
-			return source, crs, nil
-		}
-
-		key, remainder, addCr, err := readSized(source, 'K')
-		if err != nil {
-			return source, crs, err
-		}
-		crs += addCr
-		value, remainder, addCr, err := readSized(remainder, 'V')
-		if err != nil {
-			return source, crs, err
-		}
-		crs += addCr
-		keyStr := string(key)
-		if _, ok := (*r)[keyStr]; ok {
-			return remainder, crs, fmt.Errorf("duplicate property: %s", keyStr)
-		}
-		(*r)[keyStr] = value
-		source = remainder
+func NewProperties(r *DumpReader, length int) (*Properties, error) {
+	// If there are no properties, there are no properties.
+	if length <= 0 {
+		return &Properties{}, nil
 	}
-	return source, crs, io.EOF
+
+	propertyData, err := r.Read(length)
+	if err != nil {
+		return nil, err
+	}
+
+	r = NewDumpReader(propertyData)
+	props := &Properties{}
+	for !r.Empty() {
+		// Properties ends with a line reading just "PROPS-END" and a newline.
+		if _, ok := r.LineAfter(PropsEnd); ok {
+			return props, nil
+		}
+
+		key, err := r.ReadSized('K')
+		if err != nil {
+			return nil, err
+		}
+		value, err := r.ReadSized('V')
+		if err != nil {
+			return nil, err
+		}
+
+		keyStr := string(key)
+		if _, ok := (*props)[keyStr]; ok {
+			return nil, fmt.Errorf("duplicate property: %s", keyStr)
+		}
+
+		(*props)[keyStr] = value
+	}
+
+	return nil, io.ErrUnexpectedEOF
 }

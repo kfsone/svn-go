@@ -1,31 +1,40 @@
 package svn
 
-import "fmt"
+import (
+	"fmt"
+	"strconv"
+)
 
 type DumpHeader struct {
-	Format    int64
+	Format    int
 	ReposUUID string
 }
 
-func NewDumpHeader(source []byte) (dh DumpHeader, remainder []byte, err error) {
+func NewDumpHeader(r *DumpReader) (h DumpHeader, err error) {
 	//g: FormatHeader  <- FormatVersion Newline [UUID Newline]? Newline
+
 	//g: FormatVersion <- SVN-fs-dump-format-version: <digits>
-	//g: UUID          <- UUID: <uuid>
-	// First field should denote the dump format version.
-
-	headers, remainder, err := ReadItems(source,
-		HeaderLine{Label: "SVN-fs-dump-format-version", Optional: false, Paragraph: true},
-		HeaderLine{Label: "UUID", Optional: true, Paragraph: true})
+	verStr, ok := r.LineAfter(VersionStringHeader + ": ")
+	if !ok {
+		return h, fmt.Errorf("missing %s header, not an svn dump file?", VersionStringHeader)
+	}
+	h.Format, err = strconv.Atoi(verStr)
 	if err != nil {
-		return dh, remainder, err
+		return h, fmt.Errorf("invalid %s header: %w", VersionStringHeader, err)
+	}
+	if !r.Newline() {
+		return h, fmt.Errorf("missing newline after %s header", VersionStringHeader)
 	}
 
-	if dh.Format, err = headers["SVN-fs-dump-format-version"].Int64(); err != nil || dh.Format > 2 {
-		return dh, remainder, fmt.Errorf("dump format version: %w", err)
-	}
-	if uuid, ok := headers["UUID"]; ok {
-		dh.ReposUUID = uuid.String
+	//g: UUID          <- UUID: <uuid>
+	if h.Format >= 2 {
+		if uuid, ok := r.LineAfter(UUIDHeader + ": "); ok {
+			h.ReposUUID = uuid
+			if !r.Newline() {
+				return h, fmt.Errorf("missing newline after %s header", UUIDHeader)
+			}
+		}
 	}
 
-	return dh, remainder, nil
+	return h, nil
 }
