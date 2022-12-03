@@ -1,0 +1,14 @@
+overfork:
+  - from: repos/Evil01
+    to:   repos/Evil02
+  - from: repos/Evil02
+    to:   repos/Evil03
+
+filter:
+  - repos/mappings
+
+fixpath:
+  - repos/Evil01/Trunk
+  - repos/Evil01/Trunk/Development/Trunk
+  - repos/Evil01/Trunk/Work
+  - repos/Evil01/Branches

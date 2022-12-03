@@ -15,7 +15,7 @@ type DumpFile struct {
 	DumpHeader DumpHeader
 	Revisions  []*Revision
 
-	Data   mmap.MMap
+	Data mmap.MMap
 
 	reader *DumpReader
 }
@@ -88,21 +88,21 @@ func NewDumpFile(path string) (dump *DumpFile, err error) {
 	return dump, nil
 }
 
-func (df *DumpFile) NextRevision() error {
+func (df *DumpFile) NextRevision() (*Revision, error) {
 	if df.reader.Empty() {
-		return io.EOF
+		return nil, io.EOF
 	}
 
 	rev, err := NewRevision(df.reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	if rev.Number != len(df.Revisions) {
-		return fmt.Errorf("expected revision %d, got %d", len(df.Revisions), rev.Number)
+		return rev, fmt.Errorf("expected revision %d, got %d", len(df.Revisions), rev.Number)
 	}
 
 	df.Revisions = append(df.Revisions, rev)
 
-	return nil
+	return rev, nil
 }
