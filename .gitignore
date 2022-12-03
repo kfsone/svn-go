@@ -7,3 +7,6 @@
 /svn-go.exe
 *.exe
 *.dmp
+*.plan
+*.ipynb
+.ipynb_checkpoints/
