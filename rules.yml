@@ -9,6 +9,7 @@ filter:
 
 fixpath:
   - repos/Evil01/Trunk
-  - repos/Evil01/Trunk/Development/Trunk
-  - repos/Evil01/Trunk/Work
   - repos/Evil01/Branches
+  - repos/Evil01/Tags
+  - repos/Evil01/Work
+

@@ -6,48 +6,46 @@ import (
 
 type Revision struct {
 	Number        int
+	StartOffset   int
+	EndOffset     int
+	PropLength    int
 	ContentLength int
+	PropertyData  []byte
 	Properties    *Properties
 	Nodes         []*Node
 }
 
 func NewRevision(r *DumpReader) (rev *Revision, err error) {
+	rev = &Revision{StartOffset: r.Offset()}
+	defer func() {
+		rev.EndOffset = r.Offset()
+	}()
 	//g: Revision <- RevisionHeader Node*
 	//g: RevisionHeader <- RevisionNumber Newline PropContentLength Newline ContentLength Newline Newline
 	//g: RevisionNumber <- Revision-number: <digits>
 	//g: PropContentLength <- Prop-content-length: <digits>
 	//g: ContentLength <- Content-length: <digits>
-	headers, err := r.ReadItems(
-		HeaderLine{Label: "Revision-number", Optional: false},
-		HeaderLine{Label: "Prop-content-length", Optional: false},
-		HeaderLine{Label: "Content-length", Optional: false})
-
-	if err != nil {
-		return nil, fmt.Errorf("invalid revision header: %w", err)
+	if rev.Number, err = r.IntAfter("Revision-number"); err != nil {
+		return nil, err
 	}
-
-	var number, cl int
-	if number, err = headers.Int("Revision-number"); err != nil {
-		return nil, fmt.Errorf("invalid revision number: %w", err)
+	log("revision: %d", rev.Number)
+	if rev.PropLength, err = r.IntAfter("Prop-content-length"); err != nil {
+		return nil, err
 	}
-	info("revision: %d", number)
-
-	if cl, err = headers.Int("Content-length"); err != nil {
-		return nil, fmt.Errorf("r%d: invalid content length: %w", number, err)
-	}
-
-	properties, err := NewProperties(r, cl)
-	if err != nil {
-		return nil, fmt.Errorf("r%d: invalid property data: %w", number, err)
+	if rev.ContentLength, err = r.IntAfter("Content-length"); err != nil {
+		return nil, err
 	}
 	if !r.Newline() {
-		return nil, fmt.Errorf("r%d: missing newline after properties", number)
+		return nil, fmt.Errorf("r%d: missing newline after revision header", rev.Number)
 	}
 
-	rev = &Revision{
-		Number:        number,
-		ContentLength: cl,
-		Properties:    properties,
+	// Look at the property later.
+	rev.PropertyData, err = r.Read(rev.PropLength)
+	if err != nil {
+		return nil, err
+	}
+	if !r.Newline() {
+		return nil, fmt.Errorf("r%d: missing newline after properties", rev.Number)
 	}
 
 	for !r.Empty() {

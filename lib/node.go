@@ -1,8 +1,8 @@
 package svn
 
 import (
+	"errors"
 	"fmt"
-	"strconv"
 )
 
 type NodeKind int
@@ -11,6 +11,16 @@ const (
 	NodeKindFile NodeKind = iota
 	NodeKindDir           = iota
 )
+
+func (k NodeKind) String() string {
+	switch k {
+	case NodeKindFile:
+		return "file"
+	case NodeKindDir:
+		return "dir"
+	}
+	return "unknown"
+}
 
 type NodeAction int
 
@@ -21,13 +31,31 @@ const (
 	NodeActionReplace            = iota
 )
 
+func (a NodeAction) String() string {
+	switch a {
+	case NodeActionChange:
+		return "chg"
+	case NodeActionAdd:
+		return "add"
+	case NodeActionDelete:
+		return "del"
+	case NodeActionReplace:
+		return "rep"
+	}
+	return "unk"
+}
+
+type FileHistory struct {
+	Rev  int
+	Path string
+}
+
 type Node struct {
 	Path   string
 	Kind   NodeKind
 	Action NodeAction
 
-	FromRev  int
-	FromPath string
+	History *FileHistory
 
 	PropertiesLength int
 	TextLength       int
@@ -39,8 +67,9 @@ type Node struct {
 	Properties       *Properties
 }
 
-func NewNode(r *DumpReader) (*Node, error) {
-	node := &Node{}
+func NewNode(r *DumpReader) (node *Node, err error) {
+	node = &Node{}
+
 	var ok bool
 	if node.Path, ok = r.LineAfter("Node-path: "); !ok {
 		return nil, nil
@@ -78,23 +107,21 @@ func NewNode(r *DumpReader) (*Node, error) {
 		return nil, fmt.Errorf("%s: missing Node-kind", node.Path)
 	}
 
+	log("| %s:%4s:%s", node.Action, node.Kind, node.Path)
+
 	label := node.Path
 	if nodeKind != "" {
 		label += ":" + nodeKind
 	}
 	label += ":" + nodeAction
 
-	if fromRev, ok := r.LineAfter("Node-copyfrom-rev: "); ok {
-		if node.FromPath, ok = r.LineAfter("Node-copyfrom-path: "); !ok {
+	var history FileHistory
+	if history.Rev, err = r.IntAfter("Node-copyfrom-rev"); err == nil {
+		if history.Path, ok = r.LineAfter("Node-copyfrom-path: "); !ok {
 			return nil, fmt.Errorf("%s: missing Node-copyfrom-path", label)
 		}
-		var err error
-		if node.FromRev, err = strconv.Atoi(fromRev); err != nil {
-			return nil, fmt.Errorf("%s: invalid Node-copyfrom-rev: %s", label, fromRev)
-		}
+		node.History = &FileHistory{Rev: history.Rev, Path: history.Path}
 	}
-
-	log("| %-7s:%4s:%s", nodeAction, nodeKind, node.Path)
 
 	if node.Action == NodeActionDelete {
 		if !r.Newline() {
@@ -107,14 +134,14 @@ func NewNode(r *DumpReader) (*Node, error) {
 	node.SourceSha1, _ = r.LineAfter("Text-copy-source-sha1: ")
 	node.ContentMd5, _ = r.LineAfter("Text-content-md5: ")
 	node.ContentSha1, _ = r.LineAfter("Text-content-sha1: ")
-	var err error
-	if node.PropertiesLength, err = r.IntAfter("Prop-content-length", false); err != nil {
+
+	if node.PropertiesLength, err = r.IntAfter("Prop-content-length"); err != nil && !errors.Is(err, ErrMissingField) {
 		return nil, fmt.Errorf("%s: %w", label, err)
 	}
-	if node.TextLength, err = r.IntAfter("Text-content-length", false); err != nil {
+	if node.TextLength, err = r.IntAfter("Text-content-length"); err != nil && !errors.Is(err, ErrMissingField) {
 		return nil, fmt.Errorf("%s: %w", label, err)
 	}
-	if node.ContentLength, err = r.IntAfter("Content-length", false); err != nil {
+	if node.ContentLength, err = r.IntAfter("Content-length"); err != nil && !errors.Is(err, ErrMissingField) {
 		return nil, fmt.Errorf("%s: %w", label, err)
 	}
 	if !r.Newline() {
@@ -133,10 +160,7 @@ func NewNode(r *DumpReader) (*Node, error) {
 	}
 
 	// Skip the content data.
-	skip := node.ContentLength - node.PropertiesLength
-	if _, err = r.Read(skip); err != nil {
-		return nil, fmt.Errorf("%s: content: %w", label, err)
-	}
+	r.Discard(node.ContentLength - node.PropertiesLength)
 
 	if !r.Newline() || !r.Newline() {
 		return nil, fmt.Errorf("%s: missing newline after properties slot", label)

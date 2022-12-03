@@ -6,7 +6,6 @@ import (
 	"io"
 	"math"
 	"os"
-	"strings"
 
 	svn "github.com/kfsone/svn-go/lib"
 	yml "gopkg.in/yaml.v3"
@@ -39,6 +38,42 @@ func NewRules(filename string) (rules *Rules) {
 	return
 }
 
+func describeWorker(into *os.File, _ []string, work <-chan *svn.Revision, done chan<- bool) {
+	defer func() {
+		into.Close()
+		done <- true
+	}()
+
+	for rev := range work {
+		fmt.Fprintf(into, "%d:\n", rev.Number)
+		fmt.Fprintf(into, "  data: [%d, %d]\n", rev.StartOffset, rev.EndOffset)
+		if len(rev.Nodes) > 0 {
+			fmt.Fprintf(into, "  nodes:\n")
+			for _, node := range rev.Nodes {
+				fmt.Fprintf(into, "  - path: %s\n", node.Path)
+				fmt.Fprintf(into, "    action: %s\n", node.Action)
+				fmt.Fprintf(into, "    kind: %s\n", node.Kind)
+				if node.History != nil {
+					fmt.Fprintf(into, "    from: %d\n", node.History.Rev)
+					fmt.Fprintf(into, "    source: %s\n", node.History.Path)
+				}
+			}
+		}
+
+		// for _, fixpath := range fixpaths {
+		// 	for _, node := range rev.Nodes {
+		// 		if strings.HasSuffix(node.Path, fixpath) {
+		// 			if node.History != nil {
+		// 				fmt.Printf("r%d %s %s %s <- %d:%s\n", rev.Number, node.Action, node.Kind, node.Path, node.History.Rev, node.History.Path)
+		// 			} else {
+		// 				fmt.Printf("r%d %s %s %s\n", rev.Number, node.Action, node.Kind, node.Path)
+		// 			}
+		// 		}
+		// 	}
+		// }
+	}
+}
+
 func main() {
 	dumpFileName := flag.String("dump", "fortress.dmp", "path to dump file")
 	stopRevision := flag.Int("stop", -1, "stop after loading this revision")
@@ -56,6 +91,7 @@ func main() {
 	}
 
 	var rules = NewRules(*rulesFile)
+	fixpaths := append([]string{}, rules.FixPaths...)
 
 	df, err := svn.NewDumpFile(*dumpFileName)
 	if err != nil {
@@ -68,7 +104,16 @@ func main() {
 		stopAt = math.MaxInt
 	}
 
-	fixpaths := append([]string{}, rules.FixPaths...)
+	out, err := os.Create("out.plan")
+	if err != nil {
+		fmt.Println(fmt.Errorf("error: %w", err))
+		os.Exit(1)
+	}
+
+	work := make(chan *svn.Revision, 8)
+	done := make(chan bool)
+
+	go describeWorker(out, fixpaths, work, done)
 
 	var rev *svn.Revision
 	for df.GetHead() < stopAt {
@@ -80,14 +125,11 @@ func main() {
 			os.Exit(1)
 		}
 
-		for _, fixpath := range fixpaths {
-			for _, node := range rev.Nodes {
-				if strings.HasSuffix(node.Path, fixpath) {
-					fmt.Printf("r %d path %s kind %d action %d\n", rev.Number, node.Path, node.Kind, node.Action)
-				}
-			}
-		}
+		work <- rev
 	}
+
+	close(work)
+	<-done
 
 	if *stopRevision >= 0 && df.GetHead() != stopAt {
 		fmt.Println(fmt.Errorf("error: stop revision %d not reached", *stopRevision))

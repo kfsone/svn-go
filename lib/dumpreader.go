@@ -5,19 +5,23 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 )
 
 type DumpReader struct {
 	buffer []byte
+	length int
 }
 
 func NewDumpReader(source []byte) *DumpReader {
-	return &DumpReader{buffer: source}
+	return &DumpReader{buffer: source, length: len(source)}
 }
 
 func (r *DumpReader) Close() {
 	r.buffer = nil
+}
+
+func (r *DumpReader) Offset() int {
+	return r.length - len(r.buffer)
 }
 
 func (r *DumpReader) Newline() (ok bool) {
@@ -53,13 +57,10 @@ func (r *DumpReader) LineAfter(prefix string) (string, bool) {
 	return "", false
 }
 
-func (r *DumpReader) IntAfter(prefix string, required bool) (int, error) {
+func (r *DumpReader) IntAfter(prefix string) (int, error) {
 	str, present := r.LineAfter(prefix + ": ")
 	if !present {
-		if required {
-			return 0, fmt.Errorf("%w: %s; got: %s", ErrMissingField, prefix, r.Peek(32))
-		}
-		return 0, nil
+		return 0, fmt.Errorf("%w: %s; got: %s", ErrMissingField, prefix, r.Peek(32))
 	}
 	return strconv.Atoi(str)
 }
@@ -74,38 +75,15 @@ func (r *DumpReader) Read(length int) (data []byte, err error) {
 	return data, nil
 }
 
-func (r *DumpReader) ReadHeader(h HeaderLine) (*string, error) {
-	prefix := h.Label + ": "
-	line, ok := r.LineAfter(prefix)
-	if !ok {
-		if !h.Optional {
-			return nil, fmt.Errorf("%w: %s: got: %s", ErrMissingField, h.Label, r.Peek(40))
-		}
-		return nil, nil
+func (r *DumpReader) Discard(length int) (discard int, err error) {
+	if length > len(r.buffer) {
+		discard = len(r.buffer)
+		err = io.ErrUnexpectedEOF
+	} else {
+		discard = length
 	}
-
-	text := strings.TrimSpace(line)
-	return &text, nil
-}
-
-func (r *DumpReader) ReadItems(items ...HeaderLine) (headers Headers, err error) {
-	headers = Headers{}
-	for _, item := range items {
-		value, err := r.ReadHeader(item)
-		if err != nil {
-			return nil, err
-		}
-		// Missing optional field?
-		if value == nil {
-			continue
-		}
-		headers[item.Label] = *value
-	}
-	if !r.Newline() {
-		return nil, fmt.Errorf("%w: after headers", ErrMissingNewline)
-	}
-
-	return headers, nil
+	r.buffer = r.buffer[discard:]
+	return discard, err
 }
 
 func (r *DumpReader) ReadSized(prefix rune) (value []byte, err error) {
