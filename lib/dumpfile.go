@@ -26,6 +26,7 @@ func (df *DumpFile) GetHead() int {
 
 func (df *DumpFile) Close() {
 	df.reader.Close()
+	df.Data.Unmap()
 }
 
 func (df *DumpFile) GetRevision(rev int) (*Revision, error) {
@@ -59,17 +60,23 @@ func checkValidSource(source []byte) error {
 }
 
 func NewDumpFile(path string) (dump *DumpFile, err error) {
-	source, err := os.ReadFile(path)
+	file, err := os.OpenFile(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	data, err := mmap.Map(file, mmap.RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := checkValidSource(source); err != nil {
+	if err := checkValidSource(data); err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 
-	dump = &DumpFile{Path: path}
-	dump.reader = NewDumpReader(source)
+	dump = &DumpFile{Path: path, Data: data}
+	dump.reader = NewDumpReader(data)
 	if dump.DumpHeader, err = NewDumpHeader(dump.reader); err != nil {
 		return nil, err
 	}

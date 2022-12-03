@@ -5,3 +5,5 @@
 *.bak
 /svn-go
 /svn-go.exe
+*.exe
+*.dmp
