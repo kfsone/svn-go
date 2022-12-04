@@ -1,33 +1,24 @@
 package svn
 
+// Small helper functions.
+
 import (
 	"flag"
 	"fmt"
 	"strings"
 )
 
+// Whether to log additional output.
 var Verbose = flag.Bool("v", false, "Show verbose output")
-var Quiet = flag.Bool("q", false, "Show less output")
 
+// Any argument validation.
 func CheckArguments() error {
-	if *Verbose && *Quiet {
-		return fmt.Errorf("-verbose and -quiet conflict")
-	}
-
 	return nil
 }
 
+// Log a message if verbose output is enabled.
 func log(format string, args ...interface{}) {
 	if *Verbose {
-		s := fmt.Sprintf(format, args...)
-		s = strings.ReplaceAll(s, "\r", "<cr>")
-		s = strings.ReplaceAll(s, "\n", "<lf>")
-		fmt.Println(s)
-	}
-}
-
-func info(format string, args ...interface{}) {
-	if !*Quiet {
 		s := fmt.Sprintf(format, args...)
 		s = strings.ReplaceAll(s, "\r", "<cr>")
 		s = strings.ReplaceAll(s, "\n", "<lf>")

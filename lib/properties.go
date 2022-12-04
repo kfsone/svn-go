@@ -5,34 +5,38 @@ import (
 	"io"
 )
 
-type Properties map[string][]byte
+type Properties map[string]string
 
-func NewProperties(r *DumpReader, length int) (*Properties, error) {
+func NewProperties(data []byte) (*Properties, error) {
 	// If there are no properties, there are no properties.
-	if length <= 0 {
-		return &Properties{}, nil
+	if data == nil || len(data) <= 0 {
+		return nil, nil
 	}
 
-	propertyData, err := r.Read(length)
-	if err != nil {
-		return nil, err
-	}
-
-	r = NewDumpReader(propertyData)
+	r := NewDumpReader(data)
 	props := &Properties{}
-	for !r.Empty() {
+	var key, value []byte
+	var err error
+	for !r.AtEOF() {
 		// Properties ends with a line reading just "PROPS-END" and a newline.
 		if _, ok := r.LineAfter(PropsEnd); ok {
+			if len(*props) <= 0 {
+				props = nil
+			}
 			return props, nil
 		}
 
-		key, err := r.ReadSized('K')
-		if err != nil {
-			return nil, err
-		}
-		value, err := r.ReadSized('V')
-		if err != nil {
-			return nil, err
+		if key, err = r.ReadSized('D'); err == nil {
+			value = nil
+		} else {
+			key, err = r.ReadSized('K')
+			if err != nil {
+				return nil, err
+			}
+			value, err = r.ReadSized('V')
+			if err != nil {
+				return nil, err
+			}
 		}
 
 		keyStr := string(key)
@@ -40,7 +44,7 @@ func NewProperties(r *DumpReader, length int) (*Properties, error) {
 			return nil, fmt.Errorf("duplicate property: %s", keyStr)
 		}
 
-		(*props)[keyStr] = value
+		(*props)[keyStr] = string(value)
 	}
 
 	return nil, io.ErrUnexpectedEOF

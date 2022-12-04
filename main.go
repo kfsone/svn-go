@@ -13,72 +13,65 @@ import (
 
 var TestFile = "test.dmp"
 
-type OverFork struct {
-	From string `yaml:"from"`
-	To   string `yaml:"to"`
+var dumpFileName = flag.String("dump", "deltas.dmp", "path to dump file")
+var stopRevision = flag.Int("stop", -1, "stop after loading this revision")
+var rulesFile = flag.String("rules", "rules.yml", "path to rules file")
+
+type WorkConfig struct {
+	into  *os.File
+	rules *Rules
+	done  chan bool
 }
 
-type Rules struct {
-	Filename  string
-	OverForks []OverFork `yaml:"overfork"`
-	Filter    []string   `yaml:"filter"`
-	FixPaths  []string   `yaml:"fixpath"`
+func (c *WorkConfig) Close() {
+	c.into.Close()
+	c.done <- true
 }
 
-func NewRules(filename string) (rules *Rules) {
-	rules = &Rules{Filename: filename}
-	if filename != "" {
-		if f, err := os.ReadFile(filename); err == nil {
-			if err = yml.Unmarshal(f, rules); err != nil {
-				panic(err)
-			}
-		}
-	}
-
-	return
-}
-
-func describeWorker(into *os.File, _ []string, work <-chan *svn.Revision, done chan<- bool) {
-	defer func() {
-		into.Close()
-		done <- true
-	}()
+// encoderWorker finishes the process of describing a revision, by generating the
+// yaml representation into the output file.
+func encoderWorker(work <-chan *svn.Revision, cfg *WorkConfig) {
+	defer cfg.Close()
 
 	for rev := range work {
-		fmt.Fprintf(into, "%d:\n", rev.Number)
-		fmt.Fprintf(into, "  data: [%d, %d]\n", rev.StartOffset, rev.EndOffset)
-		if len(rev.Nodes) > 0 {
-			fmt.Fprintf(into, "  nodes:\n")
-			for _, node := range rev.Nodes {
-				fmt.Fprintf(into, "  - path: %s\n", node.Path)
-				fmt.Fprintf(into, "    action: %s\n", node.Action)
-				fmt.Fprintf(into, "    kind: %s\n", node.Kind)
-				if node.History != nil {
-					fmt.Fprintf(into, "    from: %d\n", node.History.Rev)
-					fmt.Fprintf(into, "    source: %s\n", node.History.Path)
-				}
-			}
+		// Treat eat revision as an array of one, and create an encoder for each,
+		// so that the resulting document looks like a single array of revisions.
+		// If we didn't do this, there'd be a document separator ('---') between
+		// each revision.
+		data := append([]*svn.Revision{}, rev)
+		ymlenc := yml.NewEncoder(cfg.into)
+		ymlenc.SetIndent(2)
+		ymlenc.Encode(data)
+	}
+}
+
+// describeWorker starts the process of describing a revision, by populating the
+// PropertyData structures, and then forwarding the revision to the next stage.
+func describeWorker(work <-chan *svn.Revision, cfg *WorkConfig) {
+	helper := make(chan *svn.Revision, 64)
+	defer close(helper)
+
+	// Fire-up a goroutine to handle the encoding.
+	go encoderWorker(helper, cfg)
+
+	var err error
+	for rev := range work {
+		// Generate property data for the revision header.
+		if rev.Properties, err = svn.NewProperties(rev.PropertyData); err != nil {
+			fmt.Printf("ERROR: r%d properties: %s\n", rev.Number, err)
 		}
 
-		// for _, fixpath := range fixpaths {
-		// 	for _, node := range rev.Nodes {
-		// 		if strings.HasSuffix(node.Path, fixpath) {
-		// 			if node.History != nil {
-		// 				fmt.Printf("r%d %s %s %s <- %d:%s\n", rev.Number, node.Action, node.Kind, node.Path, node.History.Rev, node.History.Path)
-		// 			} else {
-		// 				fmt.Printf("r%d %s %s %s\n", rev.Number, node.Action, node.Kind, node.Path)
-		// 			}
-		// 		}
-		// 	}
-		// }
+		// And generate property data for all of our revisions.
+		for _, node := range rev.Nodes {
+			if node.Properties, err = svn.NewProperties(node.PropertyData); err != nil {
+				fmt.Printf("ERROR: r%d node properties: %s\n", rev.Number, err)
+			}
+		}
+		helper <- rev
 	}
 }
 
 func main() {
-	dumpFileName := flag.String("dump", "fortress.dmp", "path to dump file")
-	stopRevision := flag.Int("stop", -1, "stop after loading this revision")
-	rulesFile := flag.String("rules", "rules.yml", "path to rules file")
-
 	flag.Parse()
 	if dumpFileName == nil || *dumpFileName == "" {
 		fmt.Println("missing -dump filename")
@@ -91,7 +84,6 @@ func main() {
 	}
 
 	var rules = NewRules(*rulesFile)
-	fixpaths := append([]string{}, rules.FixPaths...)
 
 	df, err := svn.NewDumpFile(*dumpFileName)
 	if err != nil {
@@ -110,10 +102,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	work := make(chan *svn.Revision, 8)
-	done := make(chan bool)
-
-	go describeWorker(out, fixpaths, work, done)
+	// Create a worker thread to receive and describe revisions,
+	// so that the loader thread can focus on just fetching
+	// and parsing svn data.
+	cfg := &WorkConfig{
+		into:  out,
+		rules: rules,
+		done:  make(chan bool, 1),
+	}
+	helper := make(chan *svn.Revision, 100)
+	go describeWorker(helper, cfg)
 
 	var rev *svn.Revision
 	for df.GetHead() < stopAt {
@@ -125,16 +123,18 @@ func main() {
 			os.Exit(1)
 		}
 
-		work <- rev
+		helper <- rev
 	}
 
-	close(work)
-	<-done
+	close(helper)
+	<-cfg.done
 
 	if *stopRevision >= 0 && df.GetHead() != stopAt {
 		fmt.Println(fmt.Errorf("error: stop revision %d not reached", *stopRevision))
 		os.Exit(1)
 	}
+
+	analyze(df, rules)
 
 	fmt.Printf("loaded: %d revisions\n", df.GetHead()+1)
 }

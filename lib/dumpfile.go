@@ -10,9 +10,10 @@ import (
 	"github.com/edsrzf/mmap-go"
 )
 
+// DumpFile encapsulates the key attributes of an svn dump file.
 type DumpFile struct {
 	Path       string
-	DumpHeader DumpHeader
+	DumpHeader *DumpHeader
 	Revisions  []*Revision
 
 	Data mmap.MMap
@@ -20,19 +21,26 @@ type DumpFile struct {
 	reader *DumpReader
 }
 
-func (df *DumpFile) GetHead() int {
-	return len(df.Revisions) - 1
-}
-
+// Close releases resources held by the dump. Note: This will invalidate
+// any slices referencing the data since it releases the mmap.
 func (df *DumpFile) Close() {
 	df.reader.Close()
 	df.Data.Unmap()
 }
 
+// GetHead returns the highest revision number represented by the dump.
+func (df *DumpFile) GetHead() int {
+	return len(df.Revisions) - 1
+}
+
+// GetRevision returns either a pointer to the record for the specified
+// revision or an error explaining why it could not.
 func (df *DumpFile) GetRevision(rev int) (*Revision, error) {
+	// Disallow negative revision numbers.
 	if rev < 0 {
 		return nil, fmt.Errorf("invalid revision #%d", rev)
 	}
+	// Bounds check the revision number.
 	if rev >= len(df.Revisions) {
 		return nil, fmt.Errorf("revision #%d does not exist", rev)
 	}
@@ -40,6 +48,11 @@ func (df *DumpFile) GetRevision(rev int) (*Revision, error) {
 	return df.Revisions[rev], nil
 }
 
+// checkValidSource tests that a mapped file looks like an actual, valid svn dump.
+// Also checks that the user created the dump with "-F" by testing whether the
+// first line has windows (CRLF) line endings. The OS adds these when svnadmin
+// writes to the console and invalidates all of the headers by making the byte
+// counts wrong (svnadmin is unaware these characters are being added).
 func checkValidSource(source []byte) error {
 	if !bytes.HasPrefix(source, []byte(VersionStringHeader+":")) {
 		return errors.New("missing dump format header, not an svnadmin dump file?")
@@ -59,6 +72,8 @@ func checkValidSource(source []byte) error {
 	return nil
 }
 
+// NewDumpFile creates a new DumpFile representation of a disk file,
+// mapping it into memory and parsing the header.
 func NewDumpFile(path string) (dump *DumpFile, err error) {
 	file, err := os.OpenFile(path, os.O_RDONLY, 0)
 	if err != nil {
@@ -81,15 +96,18 @@ func NewDumpFile(path string) (dump *DumpFile, err error) {
 		return nil, err
 	}
 
-	log("dump header: %+#v", dump.DumpHeader)
+	log("dump header: %+#v", *dump.DumpHeader)
 
-	dump.Revisions = make([]*Revision, 0, 16384)
+	// Start the list big so it doesn't have to spend a lot of time growing.
+	dump.Revisions = make([]*Revision, 0, 32768)
 
 	return dump, nil
 }
 
+// NextRevision attempts to read the next revision from the dump file, or
+// returns io.EOF if the end of file has been reached.
 func (df *DumpFile) NextRevision() (*Revision, error) {
-	if df.reader.Empty() {
+	if df.reader.AtEOF() {
 		return nil, io.EOF
 	}
 

@@ -5,34 +5,31 @@ import (
 )
 
 type Revision struct {
-	Number        int
-	StartOffset   int
-	EndOffset     int
-	PropLength    int
-	ContentLength int
-	PropertyData  []byte
-	Properties    *Properties
-	Nodes         []*Node
+	Number        int         `yaml:"rev,flow"`
+	StartOffset   int         `yaml:"start,flow"`
+	EndOffset     int         `yaml:"end,flow"`
+	PropLength    int         `yaml:"-"`
+	ContentLength int         `yaml:"-"`
+	PropertyData  []byte      `yaml:"-"`
+	Properties    *Properties `yaml:"props,flow,omitempty"`
+	Nodes         []*Node     `yaml:"nodes,omitempty"`
 }
 
 func NewRevision(r *DumpReader) (rev *Revision, err error) {
 	rev = &Revision{StartOffset: r.Offset()}
-	defer func() {
-		rev.EndOffset = r.Offset()
-	}()
 	//g: Revision <- RevisionHeader Node*
 	//g: RevisionHeader <- RevisionNumber Newline PropContentLength Newline ContentLength Newline Newline
 	//g: RevisionNumber <- Revision-number: <digits>
 	//g: PropContentLength <- Prop-content-length: <digits>
 	//g: ContentLength <- Content-length: <digits>
-	if rev.Number, err = r.IntAfter("Revision-number"); err != nil {
+	if rev.Number, err = r.IntAfter(RevisionNumberHeader); err != nil {
 		return nil, err
 	}
 	log("revision: %d", rev.Number)
-	if rev.PropLength, err = r.IntAfter("Prop-content-length"); err != nil {
+	if rev.PropLength, err = r.IntAfter(PropContentLengthHeader); err != nil {
 		return nil, err
 	}
-	if rev.ContentLength, err = r.IntAfter("Content-length"); err != nil {
+	if rev.ContentLength, err = r.IntAfter(ContentLengthHeader); err != nil {
 		return nil, err
 	}
 	if !r.Newline() {
@@ -48,11 +45,11 @@ func NewRevision(r *DumpReader) (rev *Revision, err error) {
 		return nil, fmt.Errorf("r%d: missing newline after properties", rev.Number)
 	}
 
-	for !r.Empty() {
+	for !r.AtEOF() {
 		if r.Newline() {
 			continue
 		}
-		node, err := NewNode(r)
+		node, err := NewNode(rev, r)
 		if err != nil {
 			return nil, err
 		}
@@ -61,6 +58,8 @@ func NewRevision(r *DumpReader) (rev *Revision, err error) {
 		}
 		rev.Nodes = append(rev.Nodes, node)
 	}
+
+	rev.EndOffset = r.Offset()
 
 	return rev, nil
 }
