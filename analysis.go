@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 
 	svn "github.com/kfsone/svn-go/lib"
@@ -41,7 +40,7 @@ type Analysis struct {
 	creations    map[string]*svn.Node
 	migrations   map[string]*svn.Node
 	replacements map[ /*old*/ string] /*new*/ string
-	fixes        []*svn.Node
+	lastRev      int
 }
 
 func NewAnalysis(df *svn.DumpFile, rules *Rules) *Analysis {
@@ -63,15 +62,12 @@ func NewAnalysis(df *svn.DumpFile, rules *Rules) *Analysis {
 		// Make it easier to come back and replace old paths with their new form.
 		replacements: make(map[string]string),
 
-		fixes: make([]*svn.Node, 0, 1024),
+		lastRev: 0,
 	}
 
 	// For each fixpath, go thru the svn history and find where we see it branched,
 	// and find folders that were moved into it from outside.
 	a.collectCreationsAndMigrations()
-
-	// Now find all the references to old paths.
-	a.collectFixups()
 
 	// Make sure none of the creations already start at rev 1.
 	creations := make(map[string]*svn.Node, len(a.creations))
@@ -99,50 +95,6 @@ func (a *Analysis) collectCreationsAndMigrations() {
 			a.checkPathMigration(node)
 		}
 	}
-}
-
-func (a *Analysis) collectFixups() {
-	// Old paths we need to replace.
-	replacing := getReplacementsList(a)
-
-	for _, rev := range a.revisions {
-		for _, node := range rev.Nodes {
-			_, present := has(replacing, node.Path)
-			if !present {
-				present = propertiesContains(node.Properties, replacing)
-			}
-			if present {
-				a.fixes = append(a.fixes, node)
-			}
-		}
-	}
-}
-
-func propertiesContains(props *svn.Properties, keys []string) bool {
-	if props != nil {
-		for _, value := range *props {
-			for _, key := range keys {
-				if strings.Contains(value, key) {
-					return true
-				}
-			}
-		}
-	}
-	return false
-}
-
-func getReplacementsList(a *Analysis) []string {
-	replacing := make([]string, 0, len(a.replacements))
-	for old := range a.replacements {
-		replacing = append(replacing, old)
-	}
-
-	// Refactor the list so it's sorted by length with the longest first, so that
-	// we always apply most-specific replacements first.
-	sort.Slice(replacing, func(i, j int) bool {
-		return len(replacing[i]) > len(replacing[j])
-	})
-	return replacing
 }
 
 func (a *Analysis) checkPendingPaths(node *svn.Node) {
@@ -193,4 +145,6 @@ func (a *Analysis) checkPathMigration(node *svn.Node) {
 	} else {
 		fmt.Printf("also %s'd %s (%s) -> %s in %d\n", *node.Action, node.History.Path, original, node.Path, node.Revision.Number)
 	}
+
+	a.lastRev = node.Revision.Number
 }

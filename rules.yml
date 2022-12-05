@@ -4,6 +4,12 @@ overfork:
   - from: repos/Evil02
     to:   repos/Evil03
 
+# Identify you call the standard svn folders.
+convention:
+  trunk: Trunk
+  branches: Branches
+  tags:  Tags
+
 filter:
   - repos/mappings
 

@@ -1,9 +1,7 @@
 package main
 
 import (
-	"fmt"
 	"os"
-	"strings"
 
 	yml "gopkg.in/yaml.v3"
 )
@@ -26,20 +24,37 @@ type OverFork struct {
 	To   string `yaml:"to"`
 }
 
+// Convention describes the naming conventions used within the repos,
+// i.e what the local versions of 'trunk', 'branches' and 'tags' are.
+type Convention struct {
+	Trunk    string `yaml:"trunk,omitempty"`
+	Branches string `yaml:"branches,omitempty"`
+	Tags     string `yaml:"tags,omitempty"`
+}
+
 // Rules captures the yaml description of a ruleset.
 type Rules struct {
-	Filename  string
-	OverForks []OverFork `yaml:"overfork"`
-	Filter    []string   `yaml:"filter"`
-	FixPaths  []string   `yaml:"fixpath"`
-	CreateAt  int        `yaml:"creation-revision"`
+	Filename   string
+	Convention Convention `yaml:"convention,omitempty"`
+	CreateAt   int        `yaml:"creation-revision,omitempty"`
+	Filter     []string   `yaml:"filter,omitempty"`
+	FixPaths   []string   `yaml:"fixpath,omitempty"`
+	OverForks  []OverFork `yaml:"overfork,omitempty"`
 }
 
 // NewRules returns a new Rules object populated from the yaml
 // definition in a given file. If the file is empty, returns
 // an empty ruleset.
 func NewRules(filename string) (rules *Rules) {
-	rules = &Rules{}
+	rules = &Rules{
+		Filename: filename,
+		CreateAt: 1,
+		Convention: Convention{
+			Trunk:    "Trunk",
+			Branches: "Branches",
+			Tags:     "Tags",
+		},
+	}
 
 	// Only try and load the file if it has a name.
 	if filename != "" {
@@ -53,17 +68,4 @@ func NewRules(filename string) (rules *Rules) {
 	rules.Filename = filename
 
 	return
-}
-
-func (r *Rules) TestPropertyPaths(label string, props map[string]string) bool {
-	for k, v := range props {
-		for _, fixpath := range r.FixPaths {
-			if strings.Contains(v, fixpath) {
-				fmt.Printf("%s %s references %s\n", label, k, fixpath)
-				return true
-			}
-		}
-	}
-
-	return false
 }
