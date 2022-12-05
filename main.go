@@ -129,7 +129,7 @@ func run() error {
 	defer out.Close()
 
 	// load revisions from the dump.
-	if err := loadRevisions(); err != nil {
+	if err := loadRevisions(out, df); err != nil {
 		return err
 	}
 
