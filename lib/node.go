@@ -27,6 +27,9 @@ type Node struct {
 	TextLength     int          `yaml:"-"`
 	ContentLength  int          `yaml:"-"`
 	Properties     *Properties  `yaml:"props,flow,omitempty"`
+
+	modified bool
+	removed bool
 }
 
 // NewNode tries to parse a node from the dump reader and return a Node

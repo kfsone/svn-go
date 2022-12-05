@@ -32,6 +32,7 @@ type Rules struct {
 	OverForks []OverFork `yaml:"overfork"`
 	Filter    []string   `yaml:"filter"`
 	FixPaths  []string   `yaml:"fixpath"`
+	CreateAt  int        `yaml:"creation-revision"`
 }
 
 // NewRules returns a new Rules object populated from the yaml

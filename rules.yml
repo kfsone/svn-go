@@ -8,8 +8,6 @@ filter:
   - repos/mappings
 
 fixpath:
-  - repos/Evil01/Trunk
-  - repos/Evil01/Branches
-  - repos/Evil01/Tags
-  - repos/Evil01/Work
+  - repos/Evil01
 
+creation-revision: 1

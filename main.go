@@ -130,11 +130,26 @@ func main() {
 	<-cfg.done
 
 	if *stopRevision >= 0 && df.GetHead() != stopAt {
-		fmt.Println(fmt.Errorf("error: stop revision %d not reached", *stopRevision))
+		fmt.Printf("error: stop revision %d not reached\n", *stopRevision)
 		os.Exit(1)
 	}
 
-	analyze(df, rules)
+	if len(rules.FixPaths) > 0 && rules.CreateAt >= df.GetHead() {
+		fmt.Printf("creation-revision (%d) >= head revision (%d)\n", rules.CreateAt, df.GetHead())
+		os.Exit(1)
+	}
+
+	a := NewAnalysis(df, rules)
+
+	if len(a.creations) > 0 {
+		fmt.Printf("- %d creation events to move to r%d\n", len(a.creations), rules.CreateAt)
+	}
+	if len(a.migrations) > 0 {
+		fmt.Printf("- %d migration events\n", len(a.migrations))
+	}
+	if len(a.fixes) > 0 {
+		fmt.Printf("- %d nodes to fixup\n", len(a.fixes))
+	}
 
 	fmt.Printf("loaded: %d revisions\n", df.GetHead()+1)
 }
