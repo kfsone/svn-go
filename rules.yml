@@ -1,8 +1,8 @@
-overfork:
-  - from: repos/Evil01
-    to:   repos/Evil02
-  - from: repos/Evil02
-    to:   repos/Evil03
+# Replace is applied first, so be sure to use the replaced paths
+# in other rules.
+replace:
+  '/repos/': '/'
+  'repos/':  ''
 
 # Identify you call the standard svn folders.
 convention:
@@ -11,9 +11,28 @@ convention:
   tags:  Tags
 
 filter:
-  - repos/mappings
+  - mappings
+  - repos
 
-fixpath:
-  - repos/Evil01
+# Say at some point in your history you moved everything from
+# a simple single-project structure:
+#    r001 : /trunk, /branches, ...
+# to a multi-project structure:
+#    r599 : /trunk -> /projects/Proj01/trunk
+# if you specify "/projects/Proj01" as a retrofit path, the tool
+# will find the revisions where child folders are moved into the
+# retfit path and push those moves back in history so that the
+# original folders simply become their present locations, and
+# update all path references in-between to reflect the move.
+retrofit-paths:
+  - Evil01
+
+strip-props:
+  - files: "^.*\\.(cpp|h|hpp|cxx|c|hxx|te?xt|el|template|md|frag|vert|ac|am|l|lpp|y|ypp|sln|glsl|expected|def|blueprint|in|sub|yml|yaml|xml|lib|a|o|mm|ttf|font|jpg|jpeg|tga|png|ma|psd|TGA|ini|user|strings|hdr|pfx|pkg|pas|fla|pbxproj|mb|mtl|la|sources|m|zip|rar|gypi|tif|mk|mp4|ogg|bundle|db|sed|scm|otf|html?|svg|TE?XT|props|json|css|bdgcfg|cfg|keytab|spec|client|rc|vcxprop|mp3|gz|tar|bz2|pc|mel|bmp|dist|sysconfig|csv|tsv|yy|msg|co?nf|wav|ico|m4|s|dxy|inl|mesh|vcproj|plis|ref|MF|cmake|3DS|pem|crt|guess|asm|valgrind|vsprops|swig|tmpl|bson|obj|buildinfo|status|bak|doctest|ipp|1|lightfield|xmind|tpl|make|err|tbl|d-mongod|8-5|shadegraph|ZTL|8-12|ll|8|d|vcxproj|mak|manifest|swatch|mkdoc|plist|v8|p12|disabled|8-8|suppressions|order|mdp|swatches|key|init|default|lightField|pdf|txt_original|rst|cc|dmp|smoke|upstart|filters|v2|css_t|ai|pump|jar|strongtalk|java|gyp|js)$"
+    props: [ "svn:executable" ]
+  - files: "(^|/)(\\.git(ignore|attributes)|\\.cvsignore|README|ReadMe|Readme|TODO|stamp-m3|stamp-m4|Makefile|LICENSE|values|\\.npmignore|\\.gyp|\\.gyp_new)$"
+    props: [ "svn:executable" ]
+  - files: "GLSLOptimizer/.*builtins/ir"
+    props: [ "svn:executable" ]
 
 creation-revision: 1

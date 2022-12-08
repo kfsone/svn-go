@@ -96,7 +96,7 @@ func NewDumpFile(path string) (dump *DumpFile, err error) {
 		return nil, err
 	}
 
-	log("dump header: %+#v", *dump.DumpHeader)
+	Log("dump header: %+#v", *dump.DumpHeader)
 
 	// Start the list big so it doesn't have to spend a lot of time growing.
 	dump.Revisions = make([]*Revision, 0, 32768)

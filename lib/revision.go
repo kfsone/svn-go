@@ -25,7 +25,7 @@ func NewRevision(r *DumpReader) (rev *Revision, err error) {
 	if rev.Number, err = r.IntAfter(RevisionNumberHeader); err != nil {
 		return nil, err
 	}
-	log("revision: %d", rev.Number)
+	Log("revision: %d", rev.Number)
 	if rev.PropLength, err = r.IntAfter(PropContentLengthHeader); err != nil {
 		return nil, err
 	}
@@ -62,4 +62,16 @@ func NewRevision(r *DumpReader) (rev *Revision, err error) {
 	rev.EndOffset = r.Offset()
 
 	return rev, nil
+}
+
+// GetNodeIndexesWithPrefix returns a list of node indexes that match the given path-
+// component prefix (distinguishing Model/ from Models/)
+func (rev *Revision) GetNodeIndexesWithPrefix(prefix string) []int {
+	nodes := make([]int, 0)
+	for idx, node := range rev.Nodes {
+		if MatchPathPrefix(node.Path, prefix) {
+			nodes = append(nodes, idx)
+		}
+	}
+	return nodes
 }

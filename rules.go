@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"os"
+	"regexp"
 
 	yml "gopkg.in/yaml.v3"
 )
@@ -32,14 +34,22 @@ type Convention struct {
 	Tags     string `yaml:"tags,omitempty"`
 }
 
+type StripProp struct {
+	Files      string `yaml:"files"`
+	fileRegexp *regexp.Regexp
+	Props      []string `yaml:"props"`
+}
+
 // Rules captures the yaml description of a ruleset.
 type Rules struct {
 	Filename   string
-	Convention Convention `yaml:"convention,omitempty"`
-	CreateAt   int        `yaml:"creation-revision,omitempty"`
-	Filter     []string   `yaml:"filter,omitempty"`
-	FixPaths   []string   `yaml:"fixpath,omitempty"`
-	OverForks  []OverFork `yaml:"overfork,omitempty"`
+	Convention Convention        `yaml:"convention,omitempty"`
+	CreateAt   int               `yaml:"creation-revision,omitempty"`
+	Filter     []string          `yaml:"filter,omitempty"`
+	RetroPaths []string          `yaml:"retrofit-paths,omitempty"`
+	OverForks  []OverFork        `yaml:"overfork,omitempty"`
+	Replace    map[string]string `yaml:"replace,omitempty"`
+	StripProps []StripProp       `yaml:"strip-props,omitempty"`
 }
 
 // NewRules returns a new Rules object populated from the yaml
@@ -63,6 +73,14 @@ func NewRules(filename string) (rules *Rules) {
 				panic(err)
 			}
 		}
+	}
+
+	for i := range rules.StripProps {
+		pattern := rules.StripProps[i].Files
+		if len(pattern) == 0 {
+			panic(errors.New("strip-props rule has no 'files' pattern"))
+		}
+		rules.StripProps[i].fileRegexp = regexp.MustCompile(pattern)
 	}
 
 	rules.Filename = filename

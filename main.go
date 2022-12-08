@@ -10,8 +10,8 @@ package main
 //
 // Use "rules.yml" to configure the tool.
 //
-//  # use 'fixpath' to specify the path you apply retroactively
-//  fixpath:
+//  # use 'retrofit-paths' to specify the path you apply retroactively
+//  retrofit-paths:
 //    - /Project/Trunk
 //
 //  # use 'create-revision' to specify what revision you want the
@@ -38,68 +38,38 @@ import (
 	"io"
 	"math"
 	"os"
+	"strings"
 
 	svn "github.com/kfsone/svn-go/lib"
-	yml "gopkg.in/yaml.v3"
 )
+
+type Status struct {
+	df         *svn.DumpFile
+	rules      *Rules
+	folderNews map[string]*svn.Node
+	folderAdds map[string]*svn.Node
+	branchNews map[string]*svn.Node
+	branchAdds map[string]*svn.Node
+}
+
+func NewStatus(df *svn.DumpFile, rules *Rules) *Status {
+	return &Status{
+		df:    df,
+		rules: rules,
+		// The FIRST creation of every folder.
+		folderNews: make(map[string]*svn.Node),
+		// The LAST creation of every folder.
+		folderAdds: make(map[string]*svn.Node),
+		// The FIRST creation of every branch.
+		branchNews: make(map[string]*svn.Node),
+		// The LAST creation of every branch.
+		branchAdds: make(map[string]*svn.Node),
+	}
+}
 
 // stopAt is the actual revision number we'll stop at, which will be MaxInt
 // unless the user specifies a value via -stop.
 var stopAt int = math.MaxInt
-
-// WorkConfig tracks parameters passed between the encoder workers.
-type WorkConfig struct {
-	into *os.File
-	done chan bool
-}
-
-// Release the Worker resources and signal completion via done.
-func (c *WorkConfig) Close() {
-	c.done <- true
-}
-
-// encoderWorker finishes the process of describing a revision, by generating the
-// yaml representation into the output file.
-func encoderWorker(work <-chan *svn.Revision, cfg *WorkConfig) {
-	defer cfg.Close()
-
-	for rev := range work {
-		// Treat eat revision as an array of one, and create an encoder for each,
-		// so that the resulting document looks like a single array of revisions.
-		// If we didn't do this, there'd be a document separator ('---') between
-		// each revision.
-		data := append([]*svn.Revision{}, rev)
-		ymlenc := yml.NewEncoder(cfg.into)
-		ymlenc.SetIndent(2)
-		ymlenc.Encode(data)
-	}
-}
-
-// describeWorker starts the process of describing a revision, by populating the
-// PropertyData structures, and then forwarding the revision to the next stage.
-func describeWorker(work <-chan *svn.Revision, cfg *WorkConfig) {
-	helper := make(chan *svn.Revision, 64)
-	defer close(helper)
-
-	// Fire-up a goroutine to handle the encoding.
-	go encoderWorker(helper, cfg)
-
-	var err error
-	for rev := range work {
-		// Generate property data for the revision header.
-		if rev.Properties, err = svn.NewProperties(rev.PropertyData); err != nil {
-			fmt.Printf("ERROR: r%d properties: %s\n", rev.Number, err)
-		}
-
-		// And generate property data for all of our revisions.
-		for _, node := range rev.Nodes {
-			if node.Properties, err = svn.NewProperties(node.PropertyData); err != nil {
-				fmt.Printf("ERROR: r%d node properties: %s\n", rev.Number, err)
-			}
-		}
-		helper <- rev
-	}
-}
 
 func main() {
 	parseCommandLine()
@@ -110,94 +80,181 @@ func main() {
 	}
 }
 
+// Info prints a message if -quiet was not specified.
+func Info(format string, args ...interface{}) {
+	if !*quiet {
+		s := fmt.Sprintf("-- "+format, args...)
+		s = strings.ReplaceAll(s, "\r", "<cr>")
+		s = strings.ReplaceAll(s, "\n", "<lf>")
+		fmt.Println(s)
+	}
+}
+
 func run() error {
 	// The rules file shouldn't take any time to read, so load that first.
+	Info("Loading rules")
 	var rules = NewRules(*rulesFile)
 
 	// Confirm we can actually read the dump file.
+	Info("Opening dump file: %s", *dumpFileName)
 	df, err := svn.NewDumpFile(*dumpFileName)
 	if err != nil {
 		return err
 	}
 	defer df.Close()
 
-	// Create a file to write out the analysis to.
-	out, err := os.Create("out.plan")
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
 	// load revisions from the dump.
-	if err := loadRevisions(out, df); err != nil {
+	Info("Loading revisions")
+	status := NewStatus(df, rules)
+	if err = loadRevisions(status); err != nil {
 		return err
 	}
 
-	// Analyze the effect of the rules on the loaded revisions.
-	if err := analyze(df, rules); err != nil {
+	Info("Analyzing")
+	if err = analyze(df, status); err != nil {
 		return err
 	}
+
+	if yamlFile != nil && *yamlFile != "" {
+		if err = writeReport(status); err != nil {
+			return err
+		}
+	}
+
+	Info("Finished")
 
 	return nil
 }
 
-func loadRevisions(out *os.File, df *svn.DumpFile) (err error) {
-	// Create a worker thread to receive and describe revisions,
-	// so that the loader thread can focus on just fetching
-	// and parsing svn data.
-	cfg := &WorkConfig{
-		into: out,
-		done: make(chan bool, 1), // signal from worker it's finished.
-	}
-	defer func() { <-cfg.done }()
-
-	// Create a channel for us to send revisions to the worker.
-	helper := make(chan *svn.Revision, 100)
-	defer close(helper)
-
-	// Start the worker pipeline.
-	go describeWorker(helper, cfg)
+func loadRevisions(status *Status) (err error) {
+	helper := NewHelper(32, processRevHelper, status)
+	defer helper.CloseWait()
 
 	// Iterate revisions then forward them to the worker to read
 	// the propertydata.
 	var rev *svn.Revision
-	for df.GetHead() < stopAt {
-		if rev, err = df.NextRevision(); err != nil {
+	for status.df.GetHead() < stopAt {
+		if rev, err = status.df.NextRevision(); err != nil {
 			if err == io.EOF {
 				err = nil
 			}
 			break
 		}
-
-		helper <- rev
+		helper.Queue(rev)
 	}
 
 	// If the user specified a -stop revision, check we actually reached it.
-	if *stopRevision >= 0 && df.GetHead() != stopAt {
+	if *stopRevision >= 0 && status.df.GetHead() != stopAt {
 		return fmt.Errorf("-stop revision %d not reached", stopAt)
 	}
 
 	return err // nil in the nominal case.
 }
 
-func analyze(df *svn.DumpFile, rules *Rules) error {
-	if len(rules.FixPaths) > 0 && rules.CreateAt >= df.GetHead() {
-		return fmt.Errorf("create-revision %d >= head revision %d", rules.CreateAt, df.GetHead())
+// IsSortedFunc reports whether x is sorted in ascending order, with less as the
+// comparison function.
+func IsSortedFunc[E any](x []E, less func(a, b E) bool) bool {
+	for i := len(x) - 1; i > 0; i-- {
+		if less(x[i], x[i-1]) {
+			return false
+		}
+	}
+	return true
+}
+
+// IndexFunc returns the first index i satisfying f(s[i]),
+// or -1 if none do.
+func IndexFunc[E any](s []E, f func(E) bool) int {
+	for i, v := range s {
+		if f(v) {
+			return i
+		}
+	}
+	return -1
+}
+
+type NodeLookup map[string]*svn.Node
+
+func analyze(df *svn.DumpFile, status *Status) error {
+	// Look for the inflection points where things are moved from outside
+	// into the retfit structure.
+	refitsCreated := NodeLookup{}
+
+	// Confirm all refits actually exist.
+	for _, refit := range status.rules.RetroPaths {
+		created, present := status.folderNews[refit]
+		if !present {
+			// Uh oh, is this actually a branch?
+			if created, present = status.branchNews[refit]; present {
+				return fmt.Errorf("refit:%s: can't refit a branch, only children of an actual folder.", refit)
+			}
+			fmt.Printf("refit:%s: folder not found (did you modify paths with 'replace'?)\n", refit)
+			for path, node := range status.folderNews {
+				if len(path) < len(refit)+5 {
+					fmt.Printf(" + %s: r%d\n", path, node.Revision.Number)
+				}
+			}
+		} else {
+			refitsCreated[refit] = created
+		}
 	}
 
-	a := NewAnalysis(df, rules)
+	createAtRev, err := status.df.GetRevision(status.rules.CreateAt)
+	if err != nil {
+		return fmt.Errorf("createat r%d: %w", status.rules.CreateAt, err)
+	}
+	movedNodes := make([]*svn.Node, 0, len(refitsCreated))
 
-	if len(a.creations) > 0 {
-		fmt.Printf("- %d creation events to move to r%d\n", len(a.creations), rules.CreateAt)
-	}
-	if len(a.migrations) > 0 {
-		fmt.Printf("- %d migration events\n", len(a.migrations))
-	}
-	if a.lastRev > 0 {
-		fmt.Printf("- last fixer revision: %d\n", a.lastRev)
-	}
+	for _, refit := range status.rules.RetroPaths {
+		created, ok := refitsCreated[refit]
+		if !ok {
+			continue
+		}
+		if created.Revision.Number <= status.rules.CreateAt {
+			Info("* refit:%s: folder creation at r%d < createat r%d", refit, created.Revision.Number, createAtRev.Number)
+			continue
+		}
 
-	fmt.Printf("loaded: %d revisions\n", df.GetHead()+1)
+		Info("+ %s moving creation from r%d to r%d", refit, created.Revision.Number, createAtRev.Number)
+
+		// Capture the creation and remove it from the old node.
+		movedNodes = append(movedNodes, created)
+		idx := IndexFunc(created.Revision.Nodes, func(a *svn.Node) bool {
+			return a == created
+		})
+		if idx == -1 {
+			panic("created lookup failed")
+		}
+
+		// Remove the node from its original slot.
+		created.Revision.Nodes = append(created.Revision.Nodes[:idx], created.Revision.Nodes[idx+1:]...)
+
+		if !IsSortedFunc(created.Revision.Nodes, func(a, b *svn.Node) bool {
+			return a.Path < b.Path
+		}) {
+			panic(fmt.Errorf("r%d paths not sorted", created.Revision.Number))
+		}
+
+		// Ensure the node is added after anything that needs creating before it.
+		newNodes := make([]*svn.Node, 0, len(createAtRev.Nodes)+1)
+		idx = IndexFunc(createAtRev.Nodes, func(a *svn.Node) bool {
+			return a.Path >= created.Path
+		})
+		// Nothing found, append
+		if idx == -1 {
+			newNodes = append(createAtRev.Nodes, created)
+		} else {
+			if createAtRev.Nodes[idx].Path == created.Path {
+				panic("creation already present???")
+			}
+			// Insert before the first node with a path greater than the created node.
+			newNodes = append(newNodes, createAtRev.Nodes[:idx]...)
+			newNodes = append(newNodes, created)
+			newNodes = append(newNodes, createAtRev.Nodes[idx:]...)
+		}
+
+		createAtRev.Nodes = newNodes
+	}
 
 	return nil
 }

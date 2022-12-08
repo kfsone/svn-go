@@ -28,8 +28,9 @@ type Node struct {
 	ContentLength  int          `yaml:"-"`
 	Properties     *Properties  `yaml:"props,flow,omitempty"`
 
-	modified bool
-	removed bool
+	// For user tracking
+	Modified bool `yaml:"-"`
+	Removed  bool `yaml:"-"`
 }
 
 // NewNode tries to parse a node from the dump reader and return a Node
@@ -76,7 +77,7 @@ func NewNode(rev *Revision, r *DumpReader) (node *Node, err error) {
 		return nil, fmt.Errorf("%s: missing Node-kind", node.Path)
 	}
 
-	log("| %s:%4s:%s", *node.Action, nodeKind, node.Path)
+	Log("| %s:%4s:%s", *node.Action, nodeKind, node.Path)
 
 	label := node.Path
 	if nodeKind != "" {
