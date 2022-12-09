@@ -51,8 +51,9 @@ func applyReplacementsToProperties(props *svn.Properties, replacements map[strin
 	}
 	for key, value := range *props {
 		for prefix, replacement := range replacements {
-			(*props)[key] = strings.ReplaceAll(value, prefix, replacement)
+			value = strings.ReplaceAll(value, prefix, replacement)
 		}
+		(*props)[key] = value
 	}
 }
 

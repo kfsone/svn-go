@@ -2,6 +2,7 @@
 # in other rules.
 replace:
   '/repos/': '/'
+  '/repos:': '/:'
   'repos/':  ''
 
 # Identify you call the standard svn folders.
