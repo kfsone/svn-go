@@ -42,13 +42,14 @@ type StripProp struct {
 
 // Rules captures the yaml description of a ruleset.
 type Rules struct {
+	Convention Convention `yaml:"convention,omitempty"`
+	CreateAt   int        `yaml:"creation-revision,omitempty"`
 	Filename   string
-	Convention Convention        `yaml:"convention,omitempty"`
-	CreateAt   int               `yaml:"creation-revision,omitempty"`
 	Filter     []string          `yaml:"filter,omitempty"`
-	RetroPaths []string          `yaml:"retrofit-paths,omitempty"`
 	OverForks  []OverFork        `yaml:"overfork,omitempty"`
 	Replace    map[string]string `yaml:"replace,omitempty"`
+	RetroPaths []string          `yaml:"retrofit-paths,omitempty"`
+	RetroProps []string          `yaml:"retrofit-props,omitempty"`
 	StripProps []StripProp       `yaml:"strip-props,omitempty"`
 }
 

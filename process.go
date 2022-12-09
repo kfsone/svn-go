@@ -71,7 +71,7 @@ func applyReplace(rev *svn.Revision, replacements map[string]string) {
 	// And apply 'replace' rules to all of our revisions.
 	for _, node := range rev.Nodes {
 		// Fix the paths of every node in this revision.
-		changed := svn.ReplacePathPrefix(&node.Path, replacements)
+		changed := svn.ReplacePathPrefixes(&node.Path, replacements)
 		node.Modified = true
 		if strings.HasPrefix(node.Path, "/") {
 			panic(fmt.Errorf("r%d:%s: node starts with '/' (changed: %v)", rev.Number, node.Path, changed))
@@ -108,7 +108,7 @@ func applyReplace(rev *svn.Revision, replacements map[string]string) {
 }
 
 func replaceNodeAncestryPathPrefix(node *svn.Node, replacements map[string]string) {
-	svn.ReplacePathPrefix(&node.History.Path, replacements)
+	svn.ReplacePathPrefixes(&node.History.Path, replacements)
 	if node.History.Path == "" || node.History.Path == "/" {
 		panic("ended up with empty history path")
 	}

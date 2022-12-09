@@ -26,27 +26,54 @@ func Log(format string, args ...interface{}) {
 	}
 }
 
-// ReplacePathPrefix returns the given path with any replacements defined in the ruleset.
-func ReplacePathPrefix(path *string, replacements map[string]string) (changed bool) {
+// IndexFunc returns the first index i satisfying f(s[i]),
+// or -1 if none do.
+func IndexFunc[E any](s []E, f func(E) bool) int {
+	for i, v := range s {
+		if f(v) {
+			return i
+		}
+	}
+	return -1
+}
+
+// Index returns the first index of the array satisfying s[i] == e,
+// or -1 if none do.
+func Index[E comparable](s []E, e E) int {
+	return IndexFunc(s, func(x E) bool { return x == e })
+}
+
+// ReplacePathPrefixes returns the given path with any replacements defined in the ruleset.
+func ReplacePathPrefixes(path *string, replacements map[string]string) (changed bool) {
 	for prefix, replacement := range replacements {
 		if len(prefix) == 0 {
 			continue
 		}
-		trimmedPrefix := strings.TrimRight(prefix, "/")
-		if strings.HasPrefix(*path, trimmedPrefix) {
-			// Makes sure that it's a path-component match, so we don't match
-			// "Model/" and "Models/".
-			if len(*path) == len(trimmedPrefix) || prefix[len(trimmedPrefix)] == '/' {
-				result := strings.TrimLeft(replacement+(*path)[len(trimmedPrefix):], "/")
-				if result != *path {
-					changed = true
-					*path = result
-				}
-			}
+		if ReplacePathPrefix(path, prefix, replacement) {
+			changed = true
 		}
 	}
 
 	return changed
+}
+
+func ReplacePathPrefix(path *string, prefix, replacement string) (changed bool) {
+	// Remove trailing slashes from the right side.
+	trimmedPrefix := strings.TrimRight(prefix, "/")
+
+	if strings.HasPrefix(*path, trimmedPrefix) {
+		// Makes sure that it's a path-component match, so we don't match
+		// "Model/" and "Models/".
+		if len(*path) == len(trimmedPrefix) || (*path)[len(trimmedPrefix)] == '/' {
+			result := strings.TrimLeft(replacement+(*path)[len(trimmedPrefix):], "/")
+			if result != *path {
+				*path = result
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // MatchPathPrefix returns true if the given path begins with the same path *components* as prefix.

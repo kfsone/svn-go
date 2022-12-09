@@ -35,4 +35,8 @@ strip-props:
   - files: "GLSLOptimizer/.*builtins/ir"
     props: [ "svn:executable" ]
 
+# List of properties where changes of retrofit path should be applied.
+retrofit-props:
+  - svn:mergeinfo
+
 creation-revision: 1

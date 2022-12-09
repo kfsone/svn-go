@@ -34,7 +34,6 @@ package main
 //
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"math"
@@ -42,6 +41,13 @@ import (
 	"strings"
 
 	svn "github.com/kfsone/svn-go/lib"
+)
+
+type IterDirection int
+
+const (
+	IterFwd IterDirection = iota
+	IterRev
 )
 
 type Status struct {
@@ -152,135 +158,105 @@ func loadRevisions(status *Status) (err error) {
 	return err // nil in the nominal case.
 }
 
-// IsSortedFunc reports whether x is sorted in ascending order, with less as the
-// comparison function.
-func IsSortedFunc[E any](x []E, less func(a, b E) bool) bool {
-	for i := len(x) - 1; i > 0; i-- {
-		if less(x[i], x[i-1]) {
-			return false
-		}
-	}
-	return true
-}
-
-// IndexFunc returns the first index i satisfying f(s[i]),
-// or -1 if none do.
-func IndexFunc[E any](s []E, f func(E) bool) int {
-	for i, v := range s {
-		if f(v) {
-			return i
-		}
-	}
-	return -1
-}
-
-type NodeLookup map[string]*svn.Node
-
 func analyze(status *Status) error {
-	// Look for the inflection points where things are moved from outside
-	// into the retfit structure.
-	refitLookup, err := analyzeRefits(status)
-	if err != nil {
-		return err
-	}
+	// Find branches that end up in a retrofit path but started out outside of it.
+	for refitNode := range getRefitBranches(status) {
+		Info("Refit: %s becomes %s at r%d", refitNode.History.Path, refitNode.Path, refitNode.History.Rev)
 
-	movedNodes, err := applyCreationMoves(status, refitLookup)
-	if err != nil {
-		return err
-	}
+		// Work backwards until we find where this node was created, and replace any references to it with the new path.
+		oldPath, newPath := refitNode.History.Path, refitNode.Path
+		refitRev := refitNode.Revision
 
-	Info("moved %d nodes", len(movedNodes))
+		for rno := refitRev.Number - 1; rno >= 0; rno-- {
+			rev := status.df.Revisions[rno]
+			creation := rev.FindNode(func(node *svn.Node) bool {
+				return node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionAdd && node.Path == oldPath
+			})
+			replaceAll(oldPath, newPath, rev, status)
+
+			if creation != nil {
+				Info("| -> replaced creation at %d", rno)
+				creation.Path = newPath
+				creation.Modified = true
+				break
+			}
+		}
+
+		// Remove the merge itself from later parent node.
+		if nodeNo := svn.Index(refitRev.Nodes, refitNode); nodeNo != -1 {
+			refitRev.Nodes = append(refitRev.Nodes[:nodeNo], refitRev.Nodes[nodeNo+1:]...)
+		} else {
+			panic("refit node has gone away")
+		}
+
+		// Now seek forward to find references to the old path
+		var deletionRemoved bool = false
+		for rno := refitRev.Number; rno < status.df.GetHead(); rno++ {
+			rev := status.df.Revisions[rno]
+			// Remove any attempts to delete the old branch.
+			deletion := svn.IndexFunc(rev.Nodes, func(node *svn.Node) bool {
+				return node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionDelete && node.Path == oldPath
+			})
+			if deletion != -1 {
+				rev.Nodes = append(rev.Nodes[:deletion], rev.Nodes[deletion+1:]...)
+				deletionRemoved = true
+			}
+
+			replaceAll(oldPath, newPath, rev, status)
+
+			// stop once that folder is deleted.
+			if deletionRemoved {
+				break
+			}
+		}
+	}
 
 	return nil
 }
 
-func analyzeRefits(status *Status) (NodeLookup, error) {
-	refitLookup := NodeLookup{}
-	// Confirm all refits actually exist.
-	for _, refit := range status.rules.RetroPaths {
-		created, present := status.folderNews[refit]
-		if !present {
-			// Uh oh, is this actually a branch?
-			if _, present = status.branchNews[refit]; present {
-				return nil, fmt.Errorf("refit:%s: can't refit a branch, only children of an actual folder", refit)
-			}
-			fmt.Printf("refit:%s: folder not found (did you modify paths with 'replace'?)\n", refit)
-			for path, node := range status.folderNews {
-				if len(path) < len(refit)+5 {
-					fmt.Printf(" + %s: r%d\n", path, node.Revision.Number)
+// Replace all paths that begin with oldPath with newPath.
+func replaceAll(oldPath, newPath string, rev *svn.Revision, status *Status) {
+	for _, node := range rev.Nodes {
+		if svn.ReplacePathPrefix(&node.Path, oldPath, newPath) {
+			node.Modified = true
+		}
+
+		if node.History != nil && svn.ReplacePathPrefix(&node.History.Path, oldPath, newPath) {
+			node.Modified = true
+		}
+
+		if node.Properties == nil {
+			continue
+		}
+
+		for _, prop := range status.rules.RetroProps {
+			if value, ok := (*node.Properties)[prop]; ok {
+				newVal := strings.ReplaceAll(value, oldPath, newPath)
+				if newVal != value {
+					(*node.Properties)[prop] = newVal
 				}
 			}
-			return nil, errors.New("refit lookup failed")
-		} else {
-			refitLookup[refit] = created
 		}
 	}
-
-	return refitLookup, nil
 }
 
-func applyCreationMoves(status *Status, refitLookup NodeLookup) ([]*svn.Node, error) {
-	// Lookup the revision we're supposed to move creations to.
-	createAtRev, err := status.df.GetRevision(status.rules.CreateAt)
-	if err != nil {
-		return nil, fmt.Errorf("createat r%d: %w", status.rules.CreateAt, err)
-	}
+func getRefitBranches(status *Status) <-chan *svn.Node {
+	out := make(chan *svn.Node, 16)
 
-	// Track nodes that have been moved.
-	movedNodes := make([]*svn.Node, 0, len(refitLookup))
-	for _, refit := range status.rules.RetroPaths {
-		created, ok := refitLookup[refit]
-		if !ok {
-			continue
+	go func() {
+		out := out
+		defer close(out)
+		for _, node := range status.branchAdds {
+			for _, prefix := range status.rules.RetroPaths {
+				if svn.MatchPathPrefix(node.Path, prefix) {
+					if !svn.MatchPathPrefix(node.History.Path, prefix) {
+						out <- node
+						break
+					}
+				}
+			}
 		}
-		if created.Revision.Number <= status.rules.CreateAt {
-			Info("* refit:%s: folder creation at r%d < createat r%d", refit, created.Revision.Number, createAtRev.Number)
-			continue
-		}
+	}()
 
-		if err = moveCreationNode(created, createAtRev); err != nil {
-			return nil, err
-		}
-
-		movedNodes = append(movedNodes, created)
-	}
-
-	return movedNodes, nil
-}
-
-func moveCreationNode(creation *svn.Node, createAtRev *svn.Revision) error {
-	Info("+ %s moving creation from r%d to r%d", creation.Path, creation.Revision.Number, createAtRev.Number)
-
-	// Capture the creation and remove it from the old node.
-	idx := IndexFunc(creation.Revision.Nodes, func(a *svn.Node) bool {
-		return a == creation
-	})
-	if idx == -1 {
-		return fmt.Errorf("lookup of %s node in r%d failed", creation.Path, creation.Revision.Number)
-	}
-
-	// Remove the node from its original slot.
-	creation.Revision.Nodes = append(creation.Revision.Nodes[:idx], creation.Revision.Nodes[idx+1:]...)
-
-	// Ensure the node is added after anything that needs creating before it.
-	newNodes := make([]*svn.Node, 0, len(createAtRev.Nodes)+1)
-	idx = IndexFunc(createAtRev.Nodes, func(a *svn.Node) bool {
-		return a.Path >= creation.Path
-	})
-	// Nothing found, append
-	if idx == -1 {
-		newNodes = append(createAtRev.Nodes, creation)
-	} else {
-		if createAtRev.Nodes[idx].Path == creation.Path {
-			return fmt.Errorf("creation of %s already present in r%d", creation.Path, createAtRev.Number)
-		}
-		// Insert before the first node with a path greater than the created node.
-		newNodes = append(newNodes, createAtRev.Nodes[:idx]...)
-		newNodes = append(newNodes, creation)
-		newNodes = append(newNodes, createAtRev.Nodes[idx:]...)
-	}
-
-	createAtRev.Nodes = newNodes
-
-	return nil
+	return out
 }

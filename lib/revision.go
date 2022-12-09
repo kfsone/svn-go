@@ -64,6 +64,15 @@ func NewRevision(r *DumpReader) (rev *Revision, err error) {
 	return rev, nil
 }
 
+func (rev *Revision) FindNode(predicate func(*Node) bool) *Node {
+	for _, node := range rev.Nodes {
+		if predicate(node) {
+			return node
+		}
+	}
+	return nil
+}
+
 // GetNodeIndexesWithPrefix returns a list of node indexes that match the given path-
 // component prefix (distinguishing Model/ from Models/)
 func (rev *Revision) GetNodeIndexesWithPrefix(prefix string) []int {
