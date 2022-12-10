@@ -122,29 +122,32 @@ func run() error {
 		return err
 	}
 
-	if yamlFile != nil && *yamlFile != "" {
-		if err = writeReport(status); err != nil {
+	if *outDumpName != "" {
+		out, err := os.OpenFile(*outDumpName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+
+		Info("Writing to %s", *outDumpName)
+		if err := writeDump(df, out); err != nil {
 			return err
 		}
 	}
 
-	outDumpName := "out.dump"
-	out, err := os.OpenFile(outDumpName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	defer out.Close()
-	if err != nil {
-		return err
-	}
-	Info("Writing to %s", outDumpName)
+	Info("Finished")
 
+	return nil
+}
+
+func writeDump(df *svn.DumpFile, w io.Writer) error {
 	encoder, err := svn.NewEncoder(df)
 	if err != nil {
 		return err
 	}
-	if err := encoder.Encode(out); err != nil {
+	if err := encoder.Encode(w); err != nil {
 		return err
 	}
-
-	Info("Finished")
 
 	return nil
 }
