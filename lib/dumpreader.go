@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strconv"
+	"strings"
 )
 
 // DumpReader is a wrapper and series of helpers around a byte slice and size
@@ -39,6 +40,25 @@ func (r *DumpReader) Newline() bool {
 		return true
 	}
 	return false
+}
+
+func (r *DumpReader) HeaderLine() (key string, value string, err error) {
+	// There must be a terminating \n for a key/value pair.
+	newline := bytes.IndexRune(r.buffer, '\n')
+	if newline == -1 {
+		return "", "", io.ErrUnexpectedEOF
+	}
+
+	// Consume the line.
+	line, _ := r.Read(newline + 1)
+
+	// Find the ": ".
+	colon := bytes.IndexRune(line, ':')
+	if colon == -1 || colon + 1 == len(line) || line[colon+1] != ' ' {
+		return "", "", fmt.Errorf("invalid header line: %s", line)
+	}
+
+	return string(line[:colon]), string(line[colon+2:newline]), nil
 }
 
 // LineAfter checks if the first characters in the reader match prefix, if so, it will
@@ -104,24 +124,33 @@ func (r *DumpReader) Discard(length int) (discard int, err error) {
 //
 //	K 10<LF>
 //	svn:ignore<LF>
-func (r *DumpReader) ReadSized(prefix rune) (value []byte, err error) {
-	// First line should be "{prefix} <digits>\n"
+func (r *DumpReader) ReadSized(prefixes string) (prefix byte, value []byte, err error) {
+	// g: (type: 'K' | 'V' | 'D') ' ' <digits> '\n' <byte{int(digits)}> '\n'
+	// The very shortest would be:
+	//	{ 'K', ' ', '0', '\n', '\n' }
+	if r.Length() < 5 {
+		return 0, nil, fmt.Errorf("expected dump property value")
+	}
+	prefix = r.buffer[0]
+	if strings.IndexByte(prefixes, prefix) == -1 {
+		return 0, nil, fmt.Errorf("expecting a %s prefix got %c", prefixes, prefix)
+	}
 	sizeStr, ok := r.LineAfter(string(prefix) + " ")
 	if !ok {
-		return nil, fmt.Errorf("expected '%c' prefix; got: %s", prefix, r.Peek(48))
+		return 0, nil, fmt.Errorf("expected property line; got: %s", prefix, r.Peek(48))
 	}
 	size, err := strconv.Atoi(string(sizeStr))
 	if err != nil {
-		return nil, fmt.Errorf("invalid '%c' size: %w", prefix, err)
+		return 0, nil, fmt.Errorf("invalid '%c' size: %w", prefix, err)
 	}
 	if value, err = r.Read(size); err != nil {
-		return nil, err
+		return 0, nil, err
 	}
 	if !r.Newline() {
-		return nil, fmt.Errorf("%w: after sized %c data: %s", ErrMissingNewline, prefix, string(value))
+		return 0, nil, fmt.Errorf("%w: after sized %c data: %s", ErrMissingNewline, prefix, string(value))
 	}
 
-	return value, nil
+	return prefix, value, nil
 }
 
 // AtEOF returns true if there is no data left in the reader.
@@ -140,8 +169,7 @@ func (r *DumpReader) Length() int {
 func (r *DumpReader) Peek(length int) (data []byte) {
 	if length > len(r.buffer) {
 		length = len(r.buffer)
-		return r.buffer[:length]
 	}
 
-	return []byte(string(r.buffer[:length]) + "...")
+	return r.buffer[:length]
 }

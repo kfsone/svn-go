@@ -2,6 +2,7 @@ package svn
 
 import (
 	"fmt"
+	"io"
 )
 
 // DumpHeader represents the premable of the dump, which denotes the dump format number
@@ -36,4 +37,17 @@ func NewDumpHeader(r *DumpReader) (h *DumpHeader, err error) {
 	}
 
 	return h, nil
+}
+
+func (h *DumpHeader) Encode(w io.Writer) error {
+	if _, err := fmt.Fprintf(w, "%s: %d\n\n", VersionStringHeader, h.Format); err != nil {
+		return err
+	}
+	if h.Format >= 2 {
+		if _, err := fmt.Fprintf(w, "%s: %s\n\n", UUIDHeader, h.ReposUUID); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }

@@ -2,6 +2,7 @@ package svn
 
 import (
 	"fmt"
+	"io"
 )
 
 type Revision struct {
@@ -44,19 +45,23 @@ func NewRevision(r *DumpReader) (rev *Revision, err error) {
 	if !r.Newline() {
 		return nil, fmt.Errorf("r%d: missing newline after properties", rev.Number)
 	}
+	r.Newline()
 
-	for !r.AtEOF() {
-		if r.Newline() {
-			continue
+	for {
+		if ahead := r.Peek(len(NodePathHeader)); string(ahead) != NodePathHeader {
+			break
 		}
 		node, err := NewNode(rev, r)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("r%d: %w", rev.Number, err)
 		}
 		if node == nil {
 			break
 		}
 		rev.Nodes = append(rev.Nodes, node)
+
+		for r.Newline() {
+		}
 	}
 
 	rev.EndOffset = r.Offset()
@@ -83,4 +88,48 @@ func (rev *Revision) GetNodeIndexesWithPrefix(prefix string) []int {
 		}
 	}
 	return nodes
+}
+
+func (rev *Revision) Encode(w io.Writer) error {
+	//g: Revision <- RevisionHeader Node*
+	//g: RevisionHeader <- RevisionNumber Newline PropContentLength Newline ContentLength Newline Newline
+	//g: RevisionNumber <- Revision-number: <digits>
+	//g: PropContentLength <- Prop-content-length: <digits>
+	//g: ContentLength <- Content-length: <digits>
+
+	// Get the property packet so we can determine the size
+	properties := rev.Properties.Bytes()
+
+	headers := []struct {
+		key string
+		val int
+	} {
+		{ key: RevisionNumberHeader, val: rev.Number },
+		{ key: PropContentLengthHeader, val: len(properties) },
+		{ key: ContentLengthHeader, val: len(properties) },
+	}
+	for _, header := range headers {
+		if _, err := fmt.Fprintf(w, "%s: %d\n", header.key, header.val); err != nil {
+			return fmt.Errorf("r%d: rev-hdrs: %w", rev.Number, err)
+		}
+	}
+	if _, err := w.Write([]byte{ '\n' }); err != nil {
+		return fmt.Errorf("r%d: %w", rev.Number, err)
+	}
+
+	// Append revision properties.
+	if _, err := w.Write(properties); err != nil {
+		return fmt.Errorf("r%d: rev-props: %w", rev.Number, err)
+	}
+	if _, err := w.Write([]byte{ '\n' }); err != nil {
+		return fmt.Errorf("r%d: tail: %w", rev.Number, err)
+	}
+
+	for _, node := range rev.Nodes {
+		if err := node.Encode(w); err != nil {
+			return fmt.Errorf("r%d: node: %w", rev.Number, err)
+		}
+	}
+
+	return nil
 }

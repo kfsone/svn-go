@@ -7,19 +7,20 @@ import (
 	svn "github.com/kfsone/svn-go/lib"
 )
 
-func mapPropertyData(rev *svn.Revision) {
-	var err error
+func mapPropertyData(rev *svn.Revision) (err error) {
 	// Generate property data for the revision header.
 	if rev.Properties, err = svn.NewProperties(rev.PropertyData); err != nil {
-		fmt.Printf("ERROR: r%d properties: %s\n", rev.Number, err)
+		return fmt.Errorf("r%d: rev-props: %w", rev.Number, err)
 	}
 
 	// And generate property data for all of our revisions.
 	for _, node := range rev.Nodes {
 		if node.Properties, err = svn.NewProperties(node.PropertyData); err != nil {
-			fmt.Printf("ERROR: r%d node properties: %s\n", rev.Number, err)
+			return fmt.Errorf("r%d:%s:%s:%s: node-props: %w", rev.Number, *node.Action, *node.Kind, node.Path, err)
 		}
 	}
+
+	return nil
 }
 
 func mapDirectoryCreations(rev *svn.Revision, status *Status) {
@@ -46,14 +47,11 @@ func mapDirectoryCreations(rev *svn.Revision, status *Status) {
 }
 
 func applyReplacementsToProperties(props *svn.Properties, replacements map[string]string) {
-	if props == nil {
-		return
-	}
-	for key, value := range *props {
+	for key, value := range props.Table {
 		for prefix, replacement := range replacements {
 			value = strings.ReplaceAll(value, prefix, replacement)
 		}
-		(*props)[key] = value
+		props.Table[key] = value
 	}
 }
 
@@ -89,7 +87,7 @@ func applyReplace(rev *svn.Revision, replacements map[string]string) {
 			}
 		}
 
-		if node.Properties != nil {
+		if node.Properties.HasKeyValues() {
 			applyReplacementsToProperties(node.Properties, replacements)
 		}
 	}
@@ -145,7 +143,9 @@ func isChangedNodePathDefunct(node *svn.Node) bool {
 // and expands them into a Properties object.
 func processRevHelper(rev *svn.Revision, status *Status) {
 	// Load properties from []byte to map[string]string
-	mapPropertyData(rev)
+	if err := mapPropertyData(rev); err != nil {
+		panic(err)
+	}
 
 	// Apply 'replace'.
 	applyReplace(rev, status.rules.Replace)
@@ -194,7 +194,7 @@ func applyFilter(rev *svn.Revision, filters []string) {
 
 func applyStripProps(rev *svn.Revision, stripProps []StripProp) {
 	for _, node := range rev.Nodes {
-		if node.Properties == nil {
+		if !node.Properties.HasKeyValues() {
 			continue
 		}
 		// Find properties we have.
@@ -204,14 +204,8 @@ func applyStripProps(rev *svn.Revision, stripProps []StripProp) {
 				continue
 			}
 			for _, prop := range stripProp.Props {
-				if _, ok := (*node.Properties)[prop]; ok {
-					node.Modified = true
-					delete((*node.Properties), prop)
-				}
+				node.Properties.Remove(prop)
 			}
-		}
-		if len(*node.Properties) == 0 {
-			node.Properties = nil
 		}
 	}
 }

@@ -3,8 +3,9 @@ package svn
 // Svn dumps refer to per-revision entries for a file/directory as a "node".
 
 import (
-	"errors"
 	"fmt"
+	"io"
+	"strconv"
 )
 
 // FileHistory represents an ancestor revision/path in, for example, a copy
@@ -14,67 +15,113 @@ type FileHistory struct {
 	Path string `yaml:"path"`
 }
 
+type HeaderBlock struct {
+	Index			[]string
+	Table			map[string]string
+	Newlines		int
+}
+
 // Node represents some action against a file or directory as part of a
 // revision.
 type Node struct {
 	Revision       *Revision    `yaml:"-"`
+	HeaderBlock	   HeaderBlock	`yaml:"headers,flow,omitempty"`
 	Path           string       `yaml:"path,flow"`
 	Kind           NodeKind     `yaml:"kind,flow"`
 	Action         NodeAction   `yaml:"action,flow"`
 	History        *FileHistory `yaml:"history,flow,omitempty"`
-	PropertyData   []byte       `yaml:"-"`
 	PropertyLength int          `yaml:"-"`
+	PropertyData   []byte       `yaml:"-"`
 	TextLength     int          `yaml:"-"`
+	TextData	   []byte		`yaml:"-"`
 	ContentLength  int          `yaml:"-"`
 	Properties     *Properties  `yaml:"props,flow,omitempty"`
+	Newlines	   int
 
 	// For user tracking
 	Modified bool `yaml:"-"`
 	Removed  bool `yaml:"-"`
 }
 
+var nodeKinds = map[string]NodeKind{
+	"file": NodeKindFile,
+	"dir":  NodeKindDir,
+}
+
+var nodeActions = map[string]NodeAction{
+	"change":  NodeActionChange,
+	"add":     NodeActionAdd,
+	"delete":  NodeActionDelete,
+	"replace": NodeActionReplace,
+}
+
+func NewHeaderBlock(r *DumpReader) (block HeaderBlock, err error) {
+	block = HeaderBlock{
+		Index: make([]string, 0, 8),
+		Table: make(map[string]string, 8),
+		Newlines: 0,
+	}
+
+	for !r.Newline() {
+		key, value, err := r.HeaderLine()
+		if err != nil {
+			return block, err
+		}
+
+		block.Index = append(block.Index, key)
+		block.Table[key] = value
+	}
+
+	if len(block.Index) == 0 {
+		return block, fmt.Errorf("expected header block, encountered blank line")
+	}
+
+	// Count trailing newlines; we must have already had one to break the top loop.
+	for {
+		block.Newlines++
+		if !r.Newline() {
+			break
+		}
+	}
+
+	return block, nil
+}
+
+
 // NewNode tries to parse a node from the dump reader and return a Node
 // representing it, otherwise an error is returned. If the buffer is
 // prefixed with anything other than a "Node-path" header, we have left
 // the node section of the dump, and nil, nil is returned.
 func NewNode(rev *Revision, r *DumpReader) (node *Node, err error) {
-	node = &Node{Revision: rev}
-
-	var ok bool
-	if node.Path, ok = r.LineAfter(NodePathPrefix); !ok {
-		return nil, nil
+	node = &Node{
+		Revision: rev,
 	}
 
-	var nodeKind string
-	if nodeKind, ok = r.LineAfter(NodeKindPrefix); ok {
-		switch nodeKind {
-		case "file":
-			node.Kind = NodeKindFile
-		case "dir":
-			node.Kind = NodeKindDir
-		default:
-			return nil, fmt.Errorf("%s: invalid %s%s", node.Path, NodeKindPrefix, nodeKind)
+	var present bool
+	var nodeAction, nodeKind string
+
+	node.HeaderBlock, err = NewHeaderBlock(r)
+	if err != nil {
+		return nil, fmt.Errorf("r%d: %w", err)
+	}
+	if node.Path, present = node.HeaderBlock.Table[NodePathHeader]; !present {
+		return nil, fmt.Errorf("missing %s header", NodePathHeader)
+	}
+	if nodeAction, present = node.HeaderBlock.Table[NodeActionHeader]; !present {
+		return nil, fmt.Errorf("missing %s header", NodeActionHeader)
+	}
+	if node.Action, present = nodeActions[nodeAction]; !present {
+		return nil, fmt.Errorf("unrecognized %s: %s", NodeActionHeader, nodeAction)
+	}
+	isDeletion := node.Action == NodeActionDelete
+	if nodeKind, present = node.HeaderBlock.Table[NodeKindHeader]; !present && !isDeletion {
+		return nil, fmt.Errorf("missing %s header", NodeKindHeader)
+	}
+
+	if nodeKind != "" {
+		if node.Kind, present = nodeKinds[nodeKind]; !present {
+			return nil, fmt.Errorf("unrecognized %s: %s", NodeKindHeader, nodeKind)
 		}
-	}
-
-	nodeAction, ok := r.LineAfter(NodeActionPrefix)
-	if !ok {
-		return nil, fmt.Errorf("%s: missing %sgot %s", node.Path, NodeActionPrefix, r.Peek(30))
-	}
-	switch nodeAction {
-	case "change":
-		node.Action = NodeActionChange
-	case "add":
-		node.Action = NodeActionAdd
-	case "delete":
-		node.Action = NodeActionDelete
-	case "replace":
-		node.Action = NodeActionReplace
-	default:
-		return nil, fmt.Errorf("%s: invalid %s%s", node.Path, NodeActionPrefix, nodeAction)
-	}
-	if node.Action != NodeActionDelete && nodeKind == "" {
-		return nil, fmt.Errorf("%s: missing Node-kind", node.Path)
 	}
 
 	Log("| %s:%4s:%s", *node.Action, nodeKind, node.Path)
@@ -85,42 +132,39 @@ func NewNode(rev *Revision, r *DumpReader) (node *Node, err error) {
 	}
 	label += ":" + nodeAction
 
-	var history FileHistory
-	if history.Rev, err = r.IntAfter(NodeCopyfromRevHeader); err == nil {
-		if history.Path, ok = r.LineAfter(NodeCopyfromPathPrefix); !ok {
-			return nil, fmt.Errorf("%s: missing %sgot %s", label, NodeCopyfromPathPrefix, r.Peek(30))
+	if fromRev, present := node.HeaderBlock.Table[NodeCopyfromRevHeader]; present {
+		node.History = &FileHistory{}
+		if node.History.Rev, err = strconv.Atoi(fromRev); err != nil {
+			return nil, fmt.Errorf("%s: %w", NodeCopyfromRevHeader, err)
 		}
-		node.History = &FileHistory{Rev: history.Rev, Path: history.Path}
-		r.LineAfter(TextCopySourceMd5Prefix)
-		r.LineAfter(TextCopySourceSha1Prefix)
+		if node.History.Path, present = node.HeaderBlock.Table[NodeCopyfromPathHeader]; !present {
+			return nil, fmt.Errorf("missing %s header", NodeCopyfromPathHeader)
+		}
 	}
 
 	if node.Action == NodeActionDelete {
-		if !r.Newline() {
-			return nil, fmt.Errorf("%s: missing newline after %sdelete", NodeActionPrefix, label)
-		}
 		return node, nil
 	}
 
-	r.LineAfter(PropDeltaPrefix)
-	if _, ok = r.LineAfter(TextDeltaPrefix); ok {
-		r.LineAfter(TextDeltaBaseMd5Prefix)
-		r.LineAfter(TextDeltaBaseSha1Prefix)
+	// helper to get a key value as an int.
+	getOptionalInt := func (header string) (value int, err error) {
+		var text string
+		if text, present = node.HeaderBlock.Table[header]; present {
+			if value, err = strconv.Atoi(text); err != nil {
+				err = fmt.Errorf("%s: %w", header, err)
+			}
+		}
+		return value, err
 	}
-	r.LineAfter(TextContentMd5Prefix)
-	r.LineAfter(TextContentSha1Prefix)
 
-	if node.PropertyLength, err = r.IntAfter(PropContentLengthHeader); err != nil && !errors.Is(err, ErrMissingField) {
-		return nil, fmt.Errorf("%s: %w", label, err)
+	if node.PropertyLength, err = getOptionalInt(PropContentLengthHeader); err != nil {
+		return nil, err
 	}
-	if node.TextLength, err = r.IntAfter(TextContentLengthHeader); err != nil && !errors.Is(err, ErrMissingField) {
-		return nil, fmt.Errorf("%s: %w", label, err)
+	if node.TextLength, err = getOptionalInt(TextContentLengthHeader); err != nil {
+		return nil, err
 	}
-	if node.ContentLength, err = r.IntAfter(ContentLengthHeader); err != nil && !errors.Is(err, ErrMissingField) {
-		return nil, fmt.Errorf("%s: %w", label, err)
-	}
-	if !r.Newline() {
-		return nil, fmt.Errorf("%s: missing newline after node headers; got: %s", label, r.Peek(60))
+	if node.ContentLength, err = getOptionalInt(ContentLengthHeader); err != nil {
+		return nil, err
 	}
 
 	if node.PropertyLength == 0 && node.TextLength == 0 {
@@ -134,11 +178,71 @@ func NewNode(rev *Revision, r *DumpReader) (node *Node, err error) {
 	}
 
 	// Skip the content data.
-	r.Discard(node.ContentLength - node.PropertyLength)
+	if node.PropertyLength + node.TextLength != node.ContentLength {
+		panic("lengths mismatch")
+	}
+	if node.TextLength > 0 {
+		if node.TextData, err = r.Read(node.TextLength); err != nil {
+			return nil, fmt.Errorf("text read: %w", err)
+		}
+	}
 
-	if !r.Newline() || !r.Newline() {
-		return nil, fmt.Errorf("%s: missing newline after properties slot", label)
+	for r.Newline() {
+		node.Newlines++
+	}
+	if node.Newlines < 2 {
+		return nil, fmt.Errorf("%s: missing newlines after properties slot", label)
 	}
 
 	return node, nil
+}
+
+func writeNewlines(w io.Writer, lines int) error {
+	for i := 0; i < lines; i++ {
+		if _, err := w.Write([]byte{'\n'}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (b *HeaderBlock) Encode(w io.Writer) error {
+	for _, key := range b.Index {
+		value, present := b.Table[key]
+		if !present {
+			return fmt.Errorf("%s value missing", key)
+		}
+		if _, err := fmt.Fprintf(w, "%s: %s\n", key, value); err != nil {
+			return err
+		}
+	}
+	return writeNewlines(w, b.Newlines)
+}
+
+func (n *Node) Encode(w io.Writer) error {
+	// We need the property block so we can recalculate the property length and
+	// content length.
+	properties := n.Properties.Bytes()
+
+	propLength := len(properties)
+	contLength := propLength + n.TextLength
+
+	n.HeaderBlock.Table[PropContentLengthHeader] = fmt.Sprintf("%d", propLength)
+	n.HeaderBlock.Table[ContentLengthHeader] = fmt.Sprintf("%d", contLength)
+
+	if err := n.HeaderBlock.Encode(w); err != nil {
+		return err
+	}
+
+	if _, err := w.Write(properties); err != nil {
+		return err
+	}
+
+	if n.TextLength > 0 {
+		if _, err := w.Write(n.TextData); err != nil {
+			return err
+		}
+	}
+
+	return writeNewlines(w, n.Newlines)
 }

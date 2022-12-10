@@ -124,3 +124,19 @@ func (df *DumpFile) NextRevision() (*Revision, error) {
 
 	return rev, nil
 }
+
+func (df *DumpFile) Encode(w io.Writer) error {
+	if err := df.DumpHeader.Encode(w); err != nil {
+		return err
+	}
+
+	//// TODO: Revisions.
+
+	for _, rev := range df.Revisions {
+		if err := rev.Encode(w); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}

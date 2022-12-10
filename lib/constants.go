@@ -12,21 +12,12 @@ const (
 	TextContentLengthHeader = "Text-content-length"
 	ContentLengthHeader     = "Content-length"
 
-	NodePathPrefix   = "Node-path: "
-	NodeKindPrefix   = "Node-kind: "
-	NodeActionPrefix = "Node-action: "
+	NodePathHeader   = "Node-path"
+	NodeKindHeader   = "Node-kind"
+	NodeActionHeader = "Node-action"
 
 	NodeCopyfromRevHeader    = "Node-copyfrom-rev"
-	NodeCopyfromPathPrefix   = "Node-copyfrom-path: "
-	TextCopySourceMd5Prefix  = "Text-copy-source-md5: "
-	TextCopySourceSha1Prefix = "Text-copy-source-sha1: "
-
-	PropDeltaPrefix         = "Prop-delta: "
-	TextDeltaPrefix         = "Text-delta: "
-	TextDeltaBaseMd5Prefix  = "Text-delta-base-md5: "
-	TextDeltaBaseSha1Prefix = "Text-delta-base-sha1: "
-	TextContentMd5Prefix    = "Text-content-md5: "
-	TextContentSha1Prefix   = "Text-content-sha1: "
+	NodeCopyfromPathHeader   = "Node-copyfrom-path"
 
 	PropsEnd = "PROPS-END"
 )

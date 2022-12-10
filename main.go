@@ -128,6 +128,18 @@ func run() error {
 		}
 	}
 
+	outDumpName := "out.dump"
+	out, err := os.OpenFile(outDumpName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	defer out.Close()
+	if err != nil {
+		return err
+	}
+	Info("Writing to %s", outDumpName)
+
+	if err := df.Encode(out); err != nil {
+		return err
+	}
+
 	Info("Finished")
 
 	return nil
@@ -225,15 +237,15 @@ func replaceAll(oldPath, newPath string, rev *svn.Revision, status *Status) {
 			node.Modified = true
 		}
 
-		if node.Properties == nil {
+		if !node.Properties.HasKeyValues() {
 			continue
 		}
 
 		for _, prop := range status.rules.RetroProps {
-			if value, ok := (*node.Properties)[prop]; ok {
+			if value, ok := node.Properties.Table[prop]; ok {
 				newVal := strings.ReplaceAll(value, oldPath, newPath)
 				if newVal != value {
-					(*node.Properties)[prop] = newVal
+					node.Properties.Table[prop] = newVal
 				}
 			}
 		}
