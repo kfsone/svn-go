@@ -2,7 +2,6 @@ package svn
 
 import (
 	"fmt"
-	"io"
 )
 
 type Revision struct {
@@ -90,7 +89,7 @@ func (rev *Revision) GetNodeIndexesWithPrefix(prefix string) []int {
 	return nodes
 }
 
-func (rev *Revision) Encode(w io.Writer) error {
+func (rev *Revision) Encode(encoder *Encoder) {
 	//g: Revision <- RevisionHeader Node*
 	//g: RevisionHeader <- RevisionNumber Newline PropContentLength Newline ContentLength Newline Newline
 	//g: RevisionNumber <- Revision-number: <digits>
@@ -109,27 +108,14 @@ func (rev *Revision) Encode(w io.Writer) error {
 		{ key: ContentLengthHeader, val: len(properties) },
 	}
 	for _, header := range headers {
-		if _, err := fmt.Fprintf(w, "%s: %d\n", header.key, header.val); err != nil {
-			return fmt.Errorf("r%d: rev-hdrs: %w", rev.Number, err)
-		}
+		encoder.Fprintf("%s: %d\n", header.key, header.val)
 	}
-	if _, err := w.Write([]byte{ '\n' }); err != nil {
-		return fmt.Errorf("r%d: %w", rev.Number, err)
-	}
+	encoder.Newlines(1)
 
 	// Append revision properties.
-	if _, err := w.Write(properties); err != nil {
-		return fmt.Errorf("r%d: rev-props: %w", rev.Number, err)
-	}
-	if _, err := w.Write([]byte{ '\n' }); err != nil {
-		return fmt.Errorf("r%d: tail: %w", rev.Number, err)
-	}
+	encoder.Write(append(properties, '\n'))
 
 	for _, node := range rev.Nodes {
-		if err := node.Encode(w); err != nil {
-			return fmt.Errorf("r%d: node: %w", rev.Number, err)
-		}
+		node.Encode(encoder)
 	}
-
-	return nil
 }

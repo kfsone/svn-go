@@ -206,20 +206,19 @@ func writeNewlines(w io.Writer, lines int) error {
 	return nil
 }
 
-func (b *HeaderBlock) Encode(w io.Writer) error {
+func (b *HeaderBlock) Encode(encoder *Encoder) {
 	for _, key := range b.Index {
 		value, present := b.Table[key]
 		if !present {
-			return fmt.Errorf("%s value missing", key)
+			panic("missing key")
 		}
-		if _, err := fmt.Fprintf(w, "%s: %s\n", key, value); err != nil {
-			return err
-		}
+		encoder.Fprintf("%s: %s\n", key, value)
 	}
-	return writeNewlines(w, b.Newlines)
+
+	encoder.Newlines(b.Newlines)
 }
 
-func (n *Node) Encode(w io.Writer) error {
+func (n *Node) Encode(encoder *Encoder) {
 	// We need the property block so we can recalculate the property length and
 	// content length.
 	properties := n.Properties.Bytes()
@@ -230,19 +229,13 @@ func (n *Node) Encode(w io.Writer) error {
 	n.HeaderBlock.Table[PropContentLengthHeader] = fmt.Sprintf("%d", propLength)
 	n.HeaderBlock.Table[ContentLengthHeader] = fmt.Sprintf("%d", contLength)
 
-	if err := n.HeaderBlock.Encode(w); err != nil {
-		return err
-	}
+	n.HeaderBlock.Encode(encoder)
 
-	if _, err := w.Write(properties); err != nil {
-		return err
-	}
+	encoder.Write(properties)
 
 	if n.TextLength > 0 {
-		if _, err := w.Write(n.TextData); err != nil {
-			return err
-		}
+		encoder.Write(n.TextData)
 	}
 
-	return writeNewlines(w, n.Newlines)
+	encoder.Newlines(n.Newlines)
 }

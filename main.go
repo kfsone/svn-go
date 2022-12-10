@@ -136,7 +136,11 @@ func run() error {
 	}
 	Info("Writing to %s", outDumpName)
 
-	if err := df.Encode(out); err != nil {
+	encoder, err := svn.NewEncoder(df)
+	if err != nil {
+		return err
+	}
+	if err := encoder.Encode(out); err != nil {
 		return err
 	}
 

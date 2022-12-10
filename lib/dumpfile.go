@@ -125,18 +125,18 @@ func (df *DumpFile) NextRevision() (*Revision, error) {
 	return rev, nil
 }
 
-func (df *DumpFile) Encode(w io.Writer) error {
-	if err := df.DumpHeader.Encode(w); err != nil {
-		return err
-	}
+func (df *DumpFile) Encode(encoder *Encoder) {
+	df.DumpHeader.Encode(encoder)
 
 	//// TODO: Revisions.
 
+	revisions := df.GetHead()
 	for _, rev := range df.Revisions {
-		if err := rev.Encode(w); err != nil {
-			return err
-		}
+		pctg := fmt.Sprintf("%5.2f", float64(rev.Number) * 100.0 / float64((revisions + 1)))
+		fmt.Printf("%s%% r%d/%d\r", pctg, rev.Number, revisions)
+
+		rev.Encode(encoder)
 	}
 
-	return nil
+	fmt.Printf("100.00%% r%d/%d\n", revisions, revisions)
 }
