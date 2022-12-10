@@ -226,6 +226,10 @@ func (n *Node) Encode(encoder *Encoder) {
 	propLength := len(properties)
 	contLength := propLength + n.TextLength
 
+	n.HeaderBlock.Table[NodePathHeader] = n.Path
+	if n.History != nil {
+		n.HeaderBlock.Table[NodeCopyfromPathHeader] = n.History.Path
+	}
 	n.HeaderBlock.Table[PropContentLengthHeader] = fmt.Sprintf("%d", propLength)
 	n.HeaderBlock.Table[ContentLengthHeader] = fmt.Sprintf("%d", contLength)
 
