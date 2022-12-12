@@ -5,171 +5,142 @@ import (
 	"fmt"
 	"io"
 	"strconv"
-	"strings"
 )
 
-// DumpReader is a wrapper and series of helpers around a byte slice and size
-// that represents a portion of a dump file.
 type DumpReader struct {
-	buffer []byte
-	length int
+	*DumpFile
 }
 
-// NewDumpReader allocates a DumpReader object that describes the given byte slice.
-func NewDumpReader(source []byte) *DumpReader {
-	return &DumpReader{buffer: source, length: len(source)}
-}
+// NewDumpReader wraps a DumpFile in a DumpReader for convenience, as long as either
+// the given format/uuid are defaulted (0/"") or match the DumpFile's values.
+func NewDumpReader(df *DumpFile, format int, uuid string) (dump *DumpReader, err error) {
+	dump = &DumpReader{df}
 
-// Close releases the reference to the buffer.
-func (r *DumpReader) Close() {
-	r.buffer = nil
-	r.length = -1
-}
-
-// Offset returns the offset of the first byte in the remaining buffer relative
-// to the beginning of the original slice.
-func (r *DumpReader) Offset() int {
-	return r.length - len(r.buffer)
-}
-
-// Newline will attempt to consume a single newline character at the beginning
-// of the buffer. Returns true if a newline was consumed, otherwise false.
-func (r *DumpReader) Newline() bool {
-	if len(r.buffer) > 0 && r.buffer[0] == '\n' {
-		r.buffer = r.buffer[1:]
-		return true
-	}
-	return false
-}
-
-func (r *DumpReader) HeaderLine() (key string, value string, err error) {
-	// There must be a terminating \n for a key/value pair.
-	newline := bytes.IndexRune(r.buffer, '\n')
-	if newline == -1 {
-		return "", "", io.ErrUnexpectedEOF
-	}
-
-	// Consume the line.
-	line, _ := r.Read(newline + 1)
-
-	// Find the ": ".
-	colon := bytes.IndexRune(line, ':')
-	if colon == -1 || colon + 1 == len(line) || line[colon+1] != ' ' {
-		return "", "", fmt.Errorf("invalid header line: %s", line)
-	}
-
-	return string(line[:colon]), string(line[colon+2:newline]), nil
-}
-
-// LineAfter checks if the first characters in the reader match prefix, if so, it will
-// consume the entire line returning the portion after prefix, before the newline.
-// If the prefix does not match, the reader is left unchanged and false is returned.
-func (r *DumpReader) LineAfter(prefix string) (line string, ok bool) {
-	if bytes.HasPrefix(r.buffer, []byte(prefix)) {
-		newline := bytes.IndexRune(r.buffer[len(prefix):], '\n')
-		if newline == -1 {
-			line, r.buffer = string(r.buffer[len(prefix):]), r.buffer[len(r.buffer):]
-		} else {
-			line, r.buffer = string(r.buffer[len(prefix):len(prefix)+newline]), r.buffer[len(prefix)+newline+1:]
-		}
-		return line, true
-	}
-	return "", false
-}
-
-// IntAfter will check if the line begins with prefix + ": ", and if so, will consume
-// the line and attempt to parse the remainder of the line as an integer. If the prefix
-// does not match, the reader is left unchanged and ErrMissingField is returned.
-func (r *DumpReader) IntAfter(prefix string) (int, error) {
-	str, present := r.LineAfter(prefix + ": ")
-	if !present {
-		return 0, fmt.Errorf("%w: %s; got: %s", ErrMissingField, prefix, r.Peek(32))
-	}
-	return strconv.Atoi(str)
-}
-
-// Read attempts to consume the specified number of bytes from the reader and returns
-// a slice representing them. If the reader does not have enough bytes, ErrUnexpectedEOF
-// is returned.
-func (r *DumpReader) Read(length int) (data []byte, err error) {
-	if length > len(r.buffer) {
-		return nil, io.ErrUnexpectedEOF
-	}
-
-	data, r.buffer = r.buffer[:length], r.buffer[length:]
-
-	return data, nil
-}
-
-// Discard attempts to dsicard bytes from the front of the reader and returns the
-// number of bytes discarded and an error if the count is less than the amount
-// requested. If the length was greater than the size of the remaining buffer,
-// the error is io.ErrUnexpectedEOF.
-func (r *DumpReader) Discard(length int) (discard int, err error) {
-	if length > len(r.buffer) {
-		discard = len(r.buffer)
-		err = io.ErrUnexpectedEOF
-	} else {
-		discard = length
-	}
-	r.buffer = r.buffer[discard:]
-	return discard, err
-}
-
-// ReadSized attempts to read a pascal-sized labelled value from the reader.
-// This is where the first byte represents the type of field (K: key, V: Value,
-// D: deletion), followed by an ascii representation of the length of the field,
-// and a line feed, followed by length bytes of data and another line feed.
-// E.g.
-//
-//	K 10<LF>
-//	svn:ignore<LF>
-func (r *DumpReader) ReadSized(prefixes string) (prefix byte, value []byte, err error) {
-	// g: (type: 'K' | 'V' | 'D') ' ' <digits> '\n' <byte{int(digits)}> '\n'
-	// The very shortest would be:
-	//	{ 'K', ' ', '0', '\n', '\n' }
-	if r.Length() < 5 {
-		return 0, nil, fmt.Errorf("expected dump property value")
-	}
-	prefix = r.buffer[0]
-	if strings.IndexByte(prefixes, prefix) == -1 {
-		return 0, nil, fmt.Errorf("expecting a %s prefix got %c", prefixes, prefix)
-	}
-	sizeStr, ok := r.LineAfter(string(prefix) + " ")
-	if !ok {
-		return 0, nil, fmt.Errorf("expected property line; got: %s", prefix, r.Peek(48))
-	}
-	size, err := strconv.Atoi(string(sizeStr))
+	// The dump format starts with two header blocks that happen to contain only
+	// one header line each.
+	//   Svn-Dump-Format-Version: N\n
+	//	 \n
+	//	 UUID: <uuid>\n
+	//	 \n
+	df.DumpFormat, err = getDumpHeader[int](dump, VersionStringHeader, strconv.Atoi)
 	if err != nil {
-		return 0, nil, fmt.Errorf("invalid '%c' size: %w", prefix, err)
+		return nil, err
 	}
-	if value, err = r.Read(size); err != nil {
-		return 0, nil, err
-	}
-	if !r.Newline() {
-		return 0, nil, fmt.Errorf("%w: after sized %c data: %s", ErrMissingNewline, prefix, string(value))
+	if format != 0 && format != df.DumpFormat {
+		return nil, fmt.Errorf("%w: format version: expected %d, got %d", ErrDumpHeaderMismatch, format, df.DumpFormat)
 	}
 
-	return prefix, value, nil
+	// Parse the repository header which should contain just the UUID.
+	df.UUID, err = getDumpHeader[string](dump, VersionStringHeader, func(s string) (string, error) { return s, nil })
+	if uuid != "" && uuid != df.UUID {
+		return nil, fmt.Errorf("%w: repository UUID: expected %s, got %s", ErrDumpHeaderMismatch, uuid, df.UUID)
+	}
+
+	return &DumpReader{df}, nil
 }
 
-// AtEOF returns true if there is no data left in the reader.
-func (r *DumpReader) AtEOF() bool {
+func getDumpHeader[T any](dump *DumpReader, header string, converter func(string) (T, error)) (value T, err error) {
+	formatHeader, err := NewHeaders(dump)
+	if err == nil {
+		var text string
+		text, err = formatHeader.String(header)
+		if err == nil {
+			value, err = converter(text)
+			if err == nil && formatHeader.Len() == 1 {
+				err = fmt.Errorf("%w: expected 1 format header, got %d", ErrInvalidDumpFile, formatHeader.Len())
+			}
+		}
+	}
+
+	return
+}
+
+// Close will close the read buffer, not the underlying map. The dumpfile itself
+// must be closed discretely.
+func (r *DumpReader) Close() error {
+	r.buffer = r.data[len(r.data):]
+	return nil
+}
+
+// IsEOI returns true if the dumpfile is at the end of its input.
+func (r *DumpReader) IsEOI() bool {
 	return len(r.buffer) == 0
 }
 
-// Length returns the remaining byte count of the reader.
-func (r *DumpReader) Length() int {
-	return len(r.buffer)
-}
-
-// Peek returns a byte slice containing the immediate N bytes at the front
-// of the reader, without actually consuming them.
-// Invalidated by the next read-type operation.
-func (r *DumpReader) Peek(length int) (data []byte) {
-	if length > len(r.buffer) {
-		length = len(r.buffer)
+// PeekLine will return the next line of the dumpfile without advancing the read cursor
+// including the newline itself. If the reader is already at EOI, it returns io.EOF.
+// If the reader does find another newline, returns io.ErrUnexpectedEOF.
+func (r *DumpReader) PeekLine() ([]byte, error) {
+	if len(r.buffer) == 0 {
+		return nil, io.EOF
+	}
+	eol := bytes.IndexByte(r.buffer, '\n')
+	if eol == -1 {
+		return nil, io.ErrUnexpectedEOF
 	}
 
-	return r.buffer[:length]
+	return r.buffer[:eol+1], nil
+}
+
+// Peek will attempt to return the next n bytes from the reader without moving
+// the read cursor. If the buffer is at EOI, returns io.EOF, otherwise if the
+// buffer does not contain n bytes, returns io.ErrUnexpectedEOF.
+func (r *DumpReader) Peek(n int) ([]byte, error) {
+	if len(r.buffer) == 0 {
+		return nil, io.EOF
+	}
+	if n > len(r.buffer) {
+		return nil, io.ErrUnexpectedEOF
+	}
+
+	return r.buffer[:n], nil
+}
+
+// Discard advances the read cursor by upto n bytes. If the buffer contained at least
+// n bytes, returns true. Otherwise, moves the read cursor to eoi and returns false.
+func (r *DumpReader) Discard(n int) bool {
+	if n > len(r.buffer) {
+		r.buffer = r.buffer[len(r.buffer):]
+		return false
+	}
+
+	r.buffer = r.buffer[n:]
+	return true
+}
+
+// Read will return a direct view of the underlying buffer upto n bytes long. If the
+// buffer does not contain enough remaining bytes, will return io.ErrUnexpectedEOF,
+// or if the buffer is at EOI it will return io.EOF.
+func (r *DumpReader) Read(n int) (data []byte, err error) {
+	if n == 0 {
+		// Return a pointer to our actual offset, but with no length.
+		return r.buffer[:0], nil
+	}
+	if data, err = r.Peek(n); err == nil {
+		r.Discard(n)
+		return data, nil
+	}
+	return nil, err
+}
+
+// ExpectAndConsume will attempt to discard the given string from the read cursor, returning
+// true if the string was present and the cursor moved, otherwise false.
+func (r *DumpReader) ExpectAndConsume(s string) bool {
+	if !r.HasPrefix(s) {
+		return false
+	}
+
+	r.Discard(len(s))
+
+	return false
+}
+
+// HasPrefix returns true if the read cursor begins with the given string.
+func (r *DumpReader) HasPrefix(s string) bool {
+	return bytes.HasPrefix(r.buffer, []byte(s))
+}
+
+// Tell returns the current offset of the read cursor from the start of the reader's buffer.
+func (r *DumpReader) Tell() int {
+	return len(r.data) - len(r.buffer)
 }

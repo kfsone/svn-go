@@ -38,6 +38,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"strings"
 
 	svn "github.com/kfsone/svn-go/lib"
@@ -51,7 +52,7 @@ const (
 )
 
 type Status struct {
-	df         *svn.DumpFile
+	*svn.Repos
 	rules      *Rules
 	folderNews map[string]*svn.Node
 	folderAdds map[string]*svn.Node
@@ -59,10 +60,9 @@ type Status struct {
 	branchAdds map[string]*svn.Node
 }
 
-func NewStatus(df *svn.DumpFile, rules *Rules) *Status {
-	return &Status{
-		df:    df,
-		rules: rules,
+func NewStatus(rules *Rules) (status *Status, err error) {
+	status = &Status{
+		Repos: svn.NewRepos(),
 		// The FIRST creation of every folder.
 		folderNews: make(map[string]*svn.Node),
 		// The LAST creation of every folder.
@@ -72,6 +72,12 @@ func NewStatus(df *svn.DumpFile, rules *Rules) *Status {
 		// The LAST creation of every branch.
 		branchAdds: make(map[string]*svn.Node),
 	}
+
+	if status.rules, err = NewRules(*rulesFile); err != nil {
+		return nil, err
+	}
+
+	return status, nil
 }
 
 // stopAt is the actual revision number we'll stop at, which will be MaxInt
@@ -87,6 +93,15 @@ func main() {
 	}
 }
 
+func Log(format string, args ...any) {
+	if *verbose {
+		s := fmt.Sprintf("-- "+format, args...)
+		s = strings.ReplaceAll(s, "\r", "<cr>")
+		s = strings.ReplaceAll(s, "\n", "<lf>")
+		fmt.Println(s)
+	}
+}
+
 // Info prints a message if -quiet was not specified.
 func Info(format string, args ...interface{}) {
 	if !*quiet {
@@ -98,23 +113,26 @@ func Info(format string, args ...interface{}) {
 }
 
 func run() error {
-	// The rules file shouldn't take any time to read, so load that first.
-	Info("Loading rules")
-	var rules = NewRules(*rulesFile)
+	// Determine what files we're going to read.
+	dumps, err := filepath.Glob(*dumpFileName)
+	if err != nil {
+		return fmt.Errorf("invalid dump file/glob: %s: %w", *dumpFileName, err)
+	}
+	if len(dumps) == 0 {
+		return fmt.Errorf("no matching dump files found: %s", *dumpFileName)
+	}
 
-	// Confirm we can actually read the dump file.
-	Info("Opening dump file: %s", *dumpFileName)
-	df, err := svn.NewDumpFile(*dumpFileName)
+	// Prepare a repository view to load dumps into.
+	status, err := NewStatus()
 	if err != nil {
 		return err
 	}
-	defer df.Close()
 
-	// load revisions from the dump.
-	Info("Loading revisions")
-	status := NewStatus(df, rules)
-	if err = loadRevisions(status); err != nil {
-		return err
+	for _, filename := range dumps {
+		Info("Loading dump file: %s", filename)
+		if err := status.LoadRevisions(filename); err != nil {
+			return err
+		}
 	}
 
 	Info("Analyzing")
@@ -130,7 +148,7 @@ func run() error {
 		defer out.Close()
 
 		Info("Writing to %s", *outDumpName)
-		if err := writeDump(df, out); err != nil {
+		if err := writeDump(status, out, 0, status.GetHead()); err != nil {
 			return err
 		}
 	}
@@ -140,7 +158,7 @@ func run() error {
 	return nil
 }
 
-func writeDump(df *svn.DumpFile, w io.Writer) error {
+func writeDump(status *Status, w io.Writer, start, end int) error {
 	encoder, err := svn.NewEncoder(df)
 	if err != nil {
 		return err
@@ -152,42 +170,17 @@ func writeDump(df *svn.DumpFile, w io.Writer) error {
 	return nil
 }
 
-func loadRevisions(status *Status) (err error) {
-	helper := NewHelper(32, processRevHelper, status)
-	defer helper.CloseWait()
-
-	// Iterate revisions then forward them to the worker to read
-	// the propertydata.
-	var rev *svn.Revision
-	for status.df.GetHead() < stopAt {
-		if rev, err = status.df.NextRevision(); err != nil {
-			if err == io.EOF {
-				err = nil
-			}
-			break
-		}
-		helper.Queue(rev)
-	}
-
-	// If the user specified a -stop revision, check we actually reached it.
-	if *stopRevision >= 0 && status.df.GetHead() != stopAt {
-		return fmt.Errorf("-stop revision %d not reached", stopAt)
-	}
-
-	return err // nil in the nominal case.
-}
-
 func analyze(status *Status) error {
 	// Find branches that end up in a retrofit path but started out outside of it.
 	for refitNode := range getRefitBranches(status) {
-		Info("Refit: %s becomes %s at r%d", refitNode.History.Path, refitNode.Path, refitNode.History.Rev)
+		oldPath, oldRev, _ := refitNode.Branched()
+		newPath            := refitNode.Path()
+		Info("Refit: %s becomes %s at r%d", oldPath, newPath, oldRev)
 
 		// Work backwards until we find where this node was created, and replace any references to it with the new path.
-		oldPath, newPath := refitNode.History.Path, refitNode.Path
 		refitRev := refitNode.Revision
-
 		for rno := refitRev.Number - 1; rno >= 0; rno-- {
-			rev := status.df.Revisions[rno]
+			rev := status.Revisions[rno]
 			creation := rev.FindNode(func(node *svn.Node) bool {
 				return node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionAdd && node.Path == oldPath
 			})

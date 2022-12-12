@@ -56,7 +56,7 @@ type Rules struct {
 // NewRules returns a new Rules object populated from the yaml
 // definition in a given file. If the file is empty, returns
 // an empty ruleset.
-func NewRules(filename string) (rules *Rules) {
+func NewRules(filename string) (rules *Rules, err error) {
 	rules = &Rules{
 		Filename: filename,
 		CreateAt: 1,
@@ -71,7 +71,7 @@ func NewRules(filename string) (rules *Rules) {
 	if filename != "" {
 		if f, err := os.ReadFile(filename); err == nil {
 			if err = yml.Unmarshal(f, rules); err != nil {
-				panic(err)
+				return nil, err
 			}
 		}
 	}
@@ -79,12 +79,12 @@ func NewRules(filename string) (rules *Rules) {
 	for i := range rules.StripProps {
 		pattern := rules.StripProps[i].Files
 		if len(pattern) == 0 {
-			panic(errors.New("strip-props rule has no 'files' pattern"))
+			return nil, errors.New("strip-props rule has no 'files' pattern")
 		}
 		rules.StripProps[i].fileRegexp = regexp.MustCompile(pattern)
 	}
 
 	rules.Filename = filename
 
-	return
+	return rules, nil
 }

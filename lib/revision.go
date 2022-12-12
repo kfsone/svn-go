@@ -2,120 +2,79 @@ package svn
 
 import (
 	"fmt"
+	"io"
 )
 
 type Revision struct {
-	Number        int         `yaml:"rev,flow"`
-	StartOffset   int         `yaml:"start,flow"`
-	EndOffset     int         `yaml:"end,flow"`
-	PropLength    int         `yaml:"-"`
-	ContentLength int         `yaml:"-"`
-	PropertyData  []byte      `yaml:"-"`
-	Properties    *Properties `yaml:"props,flow,omitempty"`
-	Nodes         []*Node     `yaml:"nodes,omitempty"`
+	Number     int         // Repository's number for this revision.
+	Headers    *Headers    // Table of headers for this revision.
+	Properties *Properties // Table of svn:properties attached to the revision.
+	Nodes      []*Node     // The actual file/directory changes in the revision.
+
+	dump        *DumpReader // The dump file this revision is from.
+	startOffset int         // Offset of first byte of this rev in that dump.
+	endOffset   int         // Offset of last byte of this rev in that dump.
+
+	contentData []byte // The raw content data for this revision.
 }
 
-func NewRevision(r *DumpReader) (rev *Revision, err error) {
-	rev = &Revision{StartOffset: r.Offset()}
-	//g: Revision <- RevisionHeader Node*
-	//g: RevisionHeader <- RevisionNumber Newline PropContentLength Newline ContentLength Newline Newline
-	//g: RevisionNumber <- Revision-number: <digits>
-	//g: PropContentLength <- Prop-content-length: <digits>
-	//g: ContentLength <- Content-length: <digits>
-	if rev.Number, err = r.IntAfter(RevisionNumberHeader); err != nil {
-		return nil, err
-	}
-	Log("revision: %d", rev.Number)
-	if rev.PropLength, err = r.IntAfter(PropContentLengthHeader); err != nil {
-		return nil, err
-	}
-	if rev.ContentLength, err = r.IntAfter(ContentLengthHeader); err != nil {
-		return nil, err
-	}
-	if !r.Newline() {
-		return nil, fmt.Errorf("r%d: missing newline after revision header", rev.Number)
+func NewRevision(dump *DumpReader) (rev *Revision, err error) {
+	rev = &Revision{
+		dump:        dump,
+		startOffset: dump.Tell(),
 	}
 
-	// Look at the property later.
-	rev.PropertyData, err = r.Read(rev.PropLength)
+	if rev.Headers, err = NewHeaders(dump); err != nil {
+		// Not an error, just no more revisions.
+		if err == io.EOF {
+			return nil, nil
+		}
+		return nil, err
+	}
+
+	// Extract the revision number.
+	if rev.Number, err = rev.Headers.Int(RevisionNumberHeader); err != nil {
+		return nil, err
+	}
+
+	// Find the length of the property data.
+	var propLen int
+	propLen, err = rev.Headers.Int(PropContentLengthHeader)
 	if err != nil {
+		return nil, fmt.Errorf("r%d: %w", err)
+	}
+
+	// Construct the property table.
+	if rev.Properties, err = NewProperties(dump, propLen); err != nil {
 		return nil, err
 	}
-	if !r.Newline() {
-		return nil, fmt.Errorf("r%d: missing newline after properties", rev.Number)
+
+	// Load it in: make this async later if we need the perf.
+	if err = rev.Properties.Load(); err != nil {
+		return nil, fmt.Errorf("r%d: loading properties: %w")
 	}
-	r.Newline()
-
-	for {
-		if ahead := r.Peek(len(NodePathHeader)); string(ahead) != NodePathHeader {
-			break
-		}
-		node, err := NewNode(rev, r)
-		if err != nil {
-			return nil, fmt.Errorf("r%d: %w", rev.Number, err)
-		}
-		if node == nil {
-			break
-		}
-		rev.Nodes = append(rev.Nodes, node)
-
-		for r.Newline() {
-		}
-	}
-
-	rev.EndOffset = r.Offset()
 
 	return rev, nil
 }
 
-func (rev *Revision) FindNode(predicate func(*Node) bool) *Node {
-	for _, node := range rev.Nodes {
-		if predicate(node) {
-			return node
+func (r *Revision) Close() error {
+	return r.dump.Close()
+}
+
+// Load the nodes associated with this revision.
+func (r *Revision) Load() (err error) {
+	// Optimistically allocate a large block to reduce the number of reallocs.
+	nodes := make([]*Node, 0, 4096)
+	var node *Node
+
+	for r.dump.HasPrefix(NodePathHeader) {
+		if node, err = NewNode(r); err != nil {
+			return fmt.Errorf("r%d: %w", r.Number, err)
 		}
+		nodes = append(nodes, node)
 	}
+
+	r.Nodes = append(r.Nodes, nodes...)
+
 	return nil
-}
-
-// GetNodeIndexesWithPrefix returns a list of node indexes that match the given path-
-// component prefix (distinguishing Model/ from Models/)
-func (rev *Revision) GetNodeIndexesWithPrefix(prefix string) []int {
-	nodes := make([]int, 0)
-	for idx, node := range rev.Nodes {
-		if MatchPathPrefix(node.Path, prefix) {
-			nodes = append(nodes, idx)
-		}
-	}
-	return nodes
-}
-
-func (rev *Revision) Encode(encoder *Encoder) {
-	//g: Revision <- RevisionHeader Node*
-	//g: RevisionHeader <- RevisionNumber Newline PropContentLength Newline ContentLength Newline Newline
-	//g: RevisionNumber <- Revision-number: <digits>
-	//g: PropContentLength <- Prop-content-length: <digits>
-	//g: ContentLength <- Content-length: <digits>
-
-	// Get the property packet so we can determine the size
-	properties := rev.Properties.Bytes()
-
-	headers := []struct {
-		key string
-		val int
-	} {
-		{ key: RevisionNumberHeader, val: rev.Number },
-		{ key: PropContentLengthHeader, val: len(properties) },
-		{ key: ContentLengthHeader, val: len(properties) },
-	}
-	for _, header := range headers {
-		encoder.Fprintf("%s: %d\n", header.key, header.val)
-	}
-	encoder.Newlines(1)
-
-	// Append revision properties.
-	encoder.Write(append(properties, '\n'))
-
-	for _, node := range rev.Nodes {
-		node.Encode(encoder)
-	}
 }

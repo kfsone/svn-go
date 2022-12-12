@@ -1,7 +1,11 @@
-// constants.go has "constant" fixed values and types that define them.
 package svn
 
-import "errors"
+// constants.go has "constant" fixed values and types that define them.
+
+import (
+	"errors"
+	"fmt"
+)
 
 // Strings used in the svn headers.
 const (
@@ -16,42 +20,18 @@ const (
 	NodeKindHeader   = "Node-kind"
 	NodeActionHeader = "Node-action"
 
-	NodeCopyfromRevHeader    = "Node-copyfrom-rev"
-	NodeCopyfromPathHeader   = "Node-copyfrom-path"
+	NodeCopyfromRevHeader  = "Node-copyfrom-rev"
+	NodeCopyfromPathHeader = "Node-copyfrom-path"
 
 	PropsEnd = "PROPS-END"
 )
 
 // Error types.
+var ErrDumpHeaderMismatch = errors.New("dump header mismatch")
+var ErrInvalidDumpFile = errors.New("invalid svn dump file")
+var ErrInvalidHeader = errors.New("invalid header")
 var ErrMissingField = errors.New("missing required field")
 var ErrMissingNewline = errors.New("missing newline")
-
-// NodeKind represents whether a node is a file/directory,
-// but note that deletes don't have a kind.
-type NodeKind *string
-
-func NewNodeKind(kind string) NodeKind {
-	str := string(kind)
-	return &str
-}
-
-var (
-	NodeKindFile = NewNodeKind("file")
-	NodeKindDir  = NewNodeKind("dir")
-)
-
-// NodeAction represents what action is being applied to a
-// node, i.e a change, addition, replacement or deletion.
-type NodeAction *string
-
-func NewNodeAction(act string) NodeAction {
-	str := string(act)
-	return &str
-}
-
-var (
-	NodeActionChange  = NewNodeAction("chg")
-	NodeActionAdd     = NewNodeAction("add")
-	NodeActionDelete  = NewNodeAction("del")
-	NodeActionReplace = NewNodeAction("rep")
-)
+var ErrWindowsDumpFile = fmt.Errorf("%w: windows line-ending translations detected, on windows use `svnadmin dump -F filename` rather than redirecting output", ErrInvalidDumpFile)
+var ErrUnknownNodeKind = errors.New("unknown node kind")
+var ErrUnknownNodeAction = errors.New("unknown node action")
