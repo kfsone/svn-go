@@ -34,9 +34,8 @@ package main
 //
 
 import (
+	"bytes"
 	"fmt"
-	"io"
-	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,7 +59,7 @@ type Status struct {
 	branchAdds map[string]*svn.Node
 }
 
-func NewStatus(rules *Rules) (status *Status, err error) {
+func NewStatus() (status *Status, err error) {
 	status = &Status{
 		Repos: svn.NewRepos(),
 		// The FIRST creation of every folder.
@@ -79,10 +78,6 @@ func NewStatus(rules *Rules) (status *Status, err error) {
 
 	return status, nil
 }
-
-// stopAt is the actual revision number we'll stop at, which will be MaxInt
-// unless the user specifies a value via -stop.
-var stopAt int = math.MaxInt
 
 func main() {
 	parseCommandLine()
@@ -130,7 +125,7 @@ func run() error {
 
 	for _, filename := range dumps {
 		Info("Loading dump file: %s", filename)
-		if err := status.LoadRevisions(filename); err != nil {
+		if err := status.LoadRevisions(filename, *stopRevision); err != nil {
 			return err
 		}
 	}
@@ -148,9 +143,8 @@ func run() error {
 		defer out.Close()
 
 		Info("Writing to %s", *outDumpName)
-		if err := writeDump(status, out, 0, status.GetHead()); err != nil {
-			return err
-		}
+		enc := svn.NewEncoder(out)
+		status.Encode(enc, 0, status.GetHead())
 	}
 
 	Info("Finished")
@@ -158,23 +152,11 @@ func run() error {
 	return nil
 }
 
-func writeDump(status *Status, w io.Writer, start, end int) error {
-	encoder, err := svn.NewEncoder(df)
-	if err != nil {
-		return err
-	}
-	if err := encoder.Encode(w); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func analyze(status *Status) error {
 	// Find branches that end up in a retrofit path but started out outside of it.
 	for refitNode := range getRefitBranches(status) {
-		oldPath, oldRev, _ := refitNode.Branched()
-		newPath            := refitNode.Path()
+		oldRev, oldPath, _ := refitNode.Branched()
+		newPath := refitNode.Path()
 		Info("Refit: %s becomes %s at r%d", oldPath, newPath, oldRev)
 
 		// Work backwards until we find where this node was created, and replace any references to it with the new path.
@@ -182,14 +164,13 @@ func analyze(status *Status) error {
 		for rno := refitRev.Number - 1; rno >= 0; rno-- {
 			rev := status.Revisions[rno]
 			creation := rev.FindNode(func(node *svn.Node) bool {
-				return node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionAdd && node.Path == oldPath
+				return node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionAdd && node.Path() == oldPath
 			})
 			replaceAll(oldPath, newPath, rev, status)
 
 			if creation != nil {
 				Info("| -> replaced creation at %d", rno)
-				creation.Path = newPath
-				creation.Modified = true
+				creation.Headers.Set(svn.NodePathHeader, newPath)
 				break
 			}
 		}
@@ -202,12 +183,12 @@ func analyze(status *Status) error {
 		}
 
 		// Now seek forward to find references to the old path
-		var deletionRemoved bool = false
-		for rno := refitRev.Number; rno < status.df.GetHead(); rno++ {
-			rev := status.df.Revisions[rno]
+		var deletionRemoved = false
+		for rno := refitRev.Number; rno < status.GetHead(); rno++ {
+			rev := status.Revisions[rno]
 			// Remove any attempts to delete the old branch.
 			deletion := svn.IndexFunc(rev.Nodes, func(node *svn.Node) bool {
-				return node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionDelete && node.Path == oldPath
+				return node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionDelete && node.Path() == oldPath
 			})
 			if deletion != -1 {
 				rev.Nodes = append(rev.Nodes[:deletion], rev.Nodes[deletion+1:]...)
@@ -229,23 +210,27 @@ func analyze(status *Status) error {
 // Replace all paths that begin with oldPath with newPath.
 func replaceAll(oldPath, newPath string, rev *svn.Revision, status *Status) {
 	for _, node := range rev.Nodes {
-		if svn.ReplacePathPrefix(&node.Path, oldPath, newPath) {
-			node.Modified = true
+		nodePath := node.Path()
+		if changed := svn.ReplacePathPrefix(nodePath, oldPath, newPath); changed != nodePath {
+			node.Headers.Set(svn.NodePathHeader, changed)
 		}
 
-		if node.History != nil && svn.ReplacePathPrefix(&node.History.Path, oldPath, newPath) {
-			node.Modified = true
+		if _, branchPath, branched := node.Branched(); branched {
+			if changed := svn.ReplacePathPrefix(branchPath, oldPath, newPath); changed != branchPath {
+				node.Headers.Set(svn.NodeCopyfromPathHeader, branchPath)
+			}
 		}
 
 		if !node.Properties.HasKeyValues() {
 			continue
 		}
 
+		oldBytes, newBytes := []byte(oldPath), []byte(newPath)
 		for _, prop := range status.rules.RetroProps {
-			if value, ok := node.Properties.Table[prop]; ok {
-				newVal := strings.ReplaceAll(value, oldPath, newPath)
-				if newVal != value {
-					node.Properties.Table[prop] = newVal
+			if value, ok := node.Properties.Get(prop); ok {
+				newVal := bytes.ReplaceAll(value, oldBytes, newBytes)
+				if !bytes.Equal(newVal, value) {
+					node.Properties.Set(prop, newVal)
 				}
 			}
 		}
@@ -260,8 +245,9 @@ func getRefitBranches(status *Status) <-chan *svn.Node {
 		defer close(out)
 		for _, node := range status.branchAdds {
 			for _, prefix := range status.rules.RetroPaths {
-				if svn.MatchPathPrefix(node.Path, prefix) {
-					if !svn.MatchPathPrefix(node.History.Path, prefix) {
+				if svn.MatchPathPrefix(node.Path(), prefix) {
+					_, branchPath, _ := node.Branched()
+					if !svn.MatchPathPrefix(branchPath, prefix) {
 						out <- node
 						break
 					}

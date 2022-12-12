@@ -14,7 +14,7 @@ import (
 //	property        := ( property-key property-value | property-deleted )
 //	property-key    := 'K' property-body
 //	property-value  := 'V' property-body
-//	proprty-deleted := 'D' property-body
+//	property-deleted:= 'D' property-body
 //	property-body   := ' ' length '\n' <byte>{length} '\n'
 //
 // To represent {"count": "1\n"} the dump would contain:
@@ -43,20 +43,26 @@ type Properties struct {
 
 var propertiesSuffix = []byte(PropsEnd + "\n")
 
-func NewProperties(dump *DumpReader, propLength int) (*Properties, error) {
+func NewProperties(dump *DumpReader, propLength int) (props *Properties, err error) {
 	// Start the object.
-	props := &Properties{
+	props = &Properties{
 		index:    make([]string, 0),
 		table:    make(map[string][]byte),
 		modified: false,
 	}
+	if propLength == 0 {
+		return props, nil
+	}
 
-	data, err := dump.Read(propLength)
+	props.raw, err = dump.Read(propLength)
 	if err != nil {
 		return nil, err
 	}
+	if len(props.raw) != propLength {
+		panic("missing property data")
+	}
 
-	if !bytes.HasSuffix(data, propertiesSuffix) {
+	if !bytes.HasSuffix(props.raw, propertiesSuffix) {
 		return nil, fmt.Errorf("properties block does not end with %s\\n", PropsEnd)
 	}
 
@@ -64,6 +70,10 @@ func NewProperties(dump *DumpReader, propLength int) (*Properties, error) {
 }
 
 func (p *Properties) Load() (err error) {
+	if len(p.raw) == 0 {
+		return nil
+	}
+
 	data := p.raw[:len(p.raw)-len(propertiesSuffix)]
 
 	var prefix byte
@@ -88,22 +98,13 @@ func (p *Properties) Load() (err error) {
 	return nil
 }
 
-func find[T comparable](list []T, key T) int {
-	for i, v := range list {
-		if v == key {
-			return i
-		}
-	}
-	return -1
-}
-
 func readSizedField(data []byte, prefixes ...byte) (prefix byte, field []byte, body []byte, err error) {
 	eol := bytes.IndexByte(data, '\n')
 	if eol == -1 {
 		return 0, nil, nil, fmt.Errorf("incomplete property field (missing linefeed)")
 	}
 	line, body := data[:eol], data[eol+1:]
-	if len(line) < 3 || find(prefixes, line[0]) == -1 || line[1] != ' ' {
+	if len(line) < 3 || Index(prefixes, line[0]) == -1 || line[1] != ' ' {
 		return 0, nil, nil, fmt.Errorf("invalid property sizer")
 	}
 	length, err := strconv.Atoi(string(line[2:]))
@@ -118,7 +119,7 @@ func readSizedField(data []byte, prefixes ...byte) (prefix byte, field []byte, b
 func (p *Properties) Bytes() (data []byte) {
 	data = p.raw
 
-	if p.modified == true {
+	if p.modified {
 		data = make([]byte, 0, len(p.raw))
 		for _, key := range p.index {
 			value, present := p.table[key]
@@ -169,10 +170,24 @@ func (p *Properties) Set(key string, value []byte) {
 		panic("shouldn't be any case to set a property that isn't already present.")
 	}
 	p.table[key] = value
+	p.modified = true
+}
+
+func (p *Properties) ApplyReplacements(replacements map[string]string) {
+	for key, value := range p.table {
+		newValue := value
+		for prefix, replacement := range replacements {
+			newValue = bytes.ReplaceAll(newValue, []byte(prefix), []byte(replacement))
+		}
+		if !bytes.Equal(value, newValue) {
+			p.table[key] = newValue
+			p.modified = true
+		}
+	}
 }
 
 func (p *Properties) Remove(key string) bool {
-	if idx := find(p.index, key); idx != -1 {
+	if idx := Index(p.index, key); idx != -1 {
 		p.index = append(p.index[:idx], p.index[idx+1:]...)
 
 		// It may not be in the Table but all we needed to know

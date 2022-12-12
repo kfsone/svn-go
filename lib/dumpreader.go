@@ -9,12 +9,13 @@ import (
 
 type DumpReader struct {
 	*DumpFile
+	buffer []byte // Read buffer, manipulated by DumpReader.
 }
 
 // NewDumpReader wraps a DumpFile in a DumpReader for convenience, as long as either
 // the given format/uuid are defaulted (0/"") or match the DumpFile's values.
 func NewDumpReader(df *DumpFile, format int, uuid string) (dump *DumpReader, err error) {
-	dump = &DumpReader{df}
+	dump = &DumpReader{DumpFile: df, buffer: df.data}
 
 	// The dump format starts with two header blocks that happen to contain only
 	// one header line each.
@@ -22,7 +23,7 @@ func NewDumpReader(df *DumpFile, format int, uuid string) (dump *DumpReader, err
 	//	 \n
 	//	 UUID: <uuid>\n
 	//	 \n
-	df.DumpFormat, err = getDumpHeader[int](dump, VersionStringHeader, strconv.Atoi)
+	df.DumpFormat, err = getDumpHeader(dump, VersionStringHeader, strconv.Atoi)
 	if err != nil {
 		return nil, err
 	}
@@ -31,12 +32,15 @@ func NewDumpReader(df *DumpFile, format int, uuid string) (dump *DumpReader, err
 	}
 
 	// Parse the repository header which should contain just the UUID.
-	df.UUID, err = getDumpHeader[string](dump, VersionStringHeader, func(s string) (string, error) { return s, nil })
+	df.UUID, err = getDumpHeader(dump, UUIDHeader, func(s string) (string, error) { return s, nil })
+	if err != nil {
+		return nil, err
+	}
 	if uuid != "" && uuid != df.UUID {
 		return nil, fmt.Errorf("%w: repository UUID: expected %s, got %s", ErrDumpHeaderMismatch, uuid, df.UUID)
 	}
 
-	return &DumpReader{df}, nil
+	return dump, nil
 }
 
 func getDumpHeader[T any](dump *DumpReader, header string, converter func(string) (T, error)) (value T, err error) {
@@ -46,8 +50,8 @@ func getDumpHeader[T any](dump *DumpReader, header string, converter func(string
 		text, err = formatHeader.String(header)
 		if err == nil {
 			value, err = converter(text)
-			if err == nil && formatHeader.Len() == 1 {
-				err = fmt.Errorf("%w: expected 1 format header, got %d", ErrInvalidDumpFile, formatHeader.Len())
+			if err == nil && formatHeader.Len() != 1 {
+				err = fmt.Errorf("%w: expected single format header, got %d", ErrInvalidDumpFile, formatHeader.Len())
 			}
 		}
 	}
@@ -132,7 +136,7 @@ func (r *DumpReader) ExpectAndConsume(s string) bool {
 
 	r.Discard(len(s))
 
-	return false
+	return true
 }
 
 // HasPrefix returns true if the read cursor begins with the given string.

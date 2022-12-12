@@ -2,26 +2,9 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	svn "github.com/kfsone/svn-go/lib"
 )
-
-func mapPropertyData(rev *svn.Revision) (err error) {
-	// Generate property data for the revision header.
-	if rev.Properties, err = svn.NewProperties(rev.PropertyData); err != nil {
-		return fmt.Errorf("r%d: rev-props: %w", rev.Number, err)
-	}
-
-	// And generate property data for all of our revisions.
-	for _, node := range rev.Nodes {
-		if node.Properties, err = svn.NewProperties(node.PropertyData); err != nil {
-			return fmt.Errorf("r%d:%s:%s:%s: node-props: %w", rev.Number, *node.Action, *node.Kind, node.Path, err)
-		}
-	}
-
-	return nil
-}
 
 func mapDirectoryCreations(rev *svn.Revision, status *Status) {
 	// Track when new directories are created, keeping both the first and last
@@ -29,29 +12,22 @@ func mapDirectoryCreations(rev *svn.Revision, status *Status) {
 	for _, node := range rev.Nodes {
 		if node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionAdd {
 			var newDict *map[string]*svn.Node
+			path := node.Path()
 			// Track "last" creation of every dir/branch
-			if node.History == nil { // creation
-				status.folderAdds[node.Path] = node
+			_, _, branched := node.Branched()
+			if !branched { // creation
+				status.folderAdds[path] = node
 				newDict = &status.folderNews
 			} else {
-				status.branchAdds[node.Path] = node
+				status.branchAdds[path] = node
 				newDict = &status.branchNews
 			}
 
 			// Track "first" creation of every dir/branch
-			if _, ok := (*newDict)[node.Path]; !ok {
-				(*newDict)[node.Path] = node
+			if _, ok := (*newDict)[path]; !ok {
+				(*newDict)[path] = node
 			}
 		}
-	}
-}
-
-func applyReplacementsToProperties(props *svn.Properties, replacements map[string]string) {
-	for key, value := range props.Table {
-		for prefix, replacement := range replacements {
-			value = strings.ReplaceAll(value, prefix, replacement)
-		}
-		props.Table[key] = value
 	}
 }
 
@@ -63,33 +39,35 @@ func applyReplacementsToProperties(props *svn.Properties, replacements map[strin
 // since you just can't.
 func applyReplace(rev *svn.Revision, replacements map[string]string) {
 	// Apply 'replace' rules to the revision header.
-	applyReplacementsToProperties(rev.Properties, replacements)
+	rev.Properties.ApplyReplacements(replacements)
 
 	deadNodes := make([]*svn.Node, 0)
 
 	// And apply 'replace' rules to all of our revisions.
 	for _, node := range rev.Nodes {
 		// Fix the paths of every node in this revision.
-		changed := svn.ReplacePathPrefixes(&node.Path, replacements)
-		node.Modified = true
-		if strings.HasPrefix(node.Path, "/") {
-			panic(fmt.Errorf("r%d:%s: node starts with '/' (changed: %v)", rev.Number, node.Path, changed))
+		path := node.Path()
+		changedPath := false
+		if changed := svn.ReplacePathPrefixes(path, replacements); changed != path {
+			node.Headers.Set(svn.NodePathHeader, changed)
+			path = changed
+			changedPath = true
 		}
 
-		if node.History != nil {
-			replaceNodeAncestryPathPrefix(node, replacements)
+		if _, branchPath, branched := node.Branched(); branched {
+			if changed := svn.ReplacePathPrefixes(branchPath, replacements); changed != branchPath {
+				node.Headers.Set(svn.NodeCopyfromPathHeader, changed)
+			}
 		}
 
 		// Did that bump us up to an invalid operation on root?
-		if changed && node.Path == "" {
+		if changedPath && path == "" {
 			if isChangedNodePathDefunct(node) {
 				deadNodes = append(deadNodes, node)
 			}
 		}
 
-		if node.Properties.HasKeyValues() {
-			applyReplacementsToProperties(node.Properties, replacements)
-		}
+		node.Properties.ApplyReplacements(replacements)
 	}
 
 	if len(deadNodes) > 0 {
@@ -97,19 +75,11 @@ func applyReplace(rev *svn.Revision, replacements map[string]string) {
 		nodes := make([]*svn.Node, 0, len(rev.Nodes)-len(deadNodes))
 		for _, node := range rev.Nodes {
 			////TODO: Audit that we don't have references to removed nodes.
-			if node.Path != "" {
+			if node.Path() != "" {
 				nodes = append(nodes, node)
-				node.Removed = true
 			}
 		}
 		rev.Nodes = nodes
-	}
-}
-
-func replaceNodeAncestryPathPrefix(node *svn.Node, replacements map[string]string) {
-	svn.ReplacePathPrefixes(&node.History.Path, replacements)
-	if node.History.Path == "" || node.History.Path == "/" {
-		panic("ended up with empty history path")
 	}
 }
 
@@ -125,13 +95,13 @@ func isChangedNodePathDefunct(node *svn.Node) bool {
 		panic(fmt.Errorf("replace results in an attempt to replace / at r%d", node.Revision.Number))
 
 	case svn.NodeActionAdd:
-		if node.History != nil {
+		if _, _, branched := node.Branched(); branched {
 			panic(fmt.Errorf("replace results in an attempt to add / with history at r%d", node.Revision.Number))
 		}
 		return true
 
 	case svn.NodeActionChange:
-		if node.History != nil && node.History.Path != "" {
+		if _, branchPath, branched := node.Branched(); branched && branchPath != "" {
 			panic(fmt.Errorf("replace results in an attempt to add / with history at r%d", node.Revision.Number))
 		}
 	}
@@ -142,11 +112,6 @@ func isChangedNodePathDefunct(node *svn.Node) bool {
 // parsePropertiesWorker reads any properties in each revision and its nodes,
 // and expands them into a Properties object.
 func processRevHelper(rev *svn.Revision, status *Status) {
-	// Load properties from []byte to map[string]string
-	if err := mapPropertyData(rev); err != nil {
-		panic(err)
-	}
-
 	// Apply 'replace'.
 	applyReplace(rev, status.rules.Replace)
 
@@ -170,7 +135,8 @@ func applyFilter(rev *svn.Revision, filters []string) {
 
 		// Check any filtered history nodes.
 		for _, node := range rev.Nodes {
-			if node.History != nil && svn.MatchPathPrefix(node.History.Path, filter) {
+			_, branchedPath, branched := node.Branched()
+			if branched && svn.MatchPathPrefix(branchedPath, filter) {
 				panic(fmt.Errorf("filter:%s would break history of %s %s %s at r%d", filter, *node.Action, *node.Kind, node.Path, rev.Number))
 			}
 		}
@@ -182,7 +148,6 @@ func applyFilter(rev *svn.Revision, filters []string) {
 		for i, node := range rev.Nodes {
 			if !filtered[i] {
 				nodes = append(nodes, node)
-				node.Removed = true
 			} else {
 				Info("r%d: filtering node %s %s %s", rev.Number, *node.Action, *node.Kind, node.Path)
 			}
@@ -200,7 +165,7 @@ func applyStripProps(rev *svn.Revision, stripProps []StripProp) {
 		// Find properties we have.
 		for _, stripProp := range stripProps {
 			// Limit to files matching the given regexp.
-			if !stripProp.fileRegexp.MatchString(node.Path) {
+			if !stripProp.fileRegexp.MatchString(node.Path()) {
 				continue
 			}
 			for _, prop := range stripProp.Props {

@@ -47,7 +47,7 @@ func NewHeaders(dump *DumpReader) (h *Headers, err error) {
 		dump.Discard(len(line))
 	}
 
-	for dump.ExpectAndConsume("\n") {
+	if dump.ExpectAndConsume("\n") {
 		h.newlines++
 	}
 
@@ -93,7 +93,7 @@ func (h *Headers) Int(key string) (int, error) {
 func (h *Headers) String(key string) (string, error) {
 	value, ok := h.table[key]
 	if !ok {
-		return "", fmt.Errorf("header %s not found", key)
+		return "", fmt.Errorf("%w: %s", ErrMissingField, key)
 	}
 	return value, nil
 }
@@ -104,4 +104,13 @@ func (h *Headers) Len() int {
 
 func (h *Headers) Set(key, value string) {
 	h.table[key] = value
+}
+
+func (h *Headers) Encode(encoder *Encoder) {
+	// Write the headers in the original order
+	for _, key := range h.index {
+		encoder.Fprintf("%s: %s\n", key, h.table[key])
+	}
+
+	encoder.Newlines(h.newlines)
 }

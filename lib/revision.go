@@ -2,7 +2,6 @@ package svn
 
 import (
 	"fmt"
-	"io"
 )
 
 type Revision struct {
@@ -14,8 +13,6 @@ type Revision struct {
 	dump        *DumpReader // The dump file this revision is from.
 	startOffset int         // Offset of first byte of this rev in that dump.
 	endOffset   int         // Offset of last byte of this rev in that dump.
-
-	contentData []byte // The raw content data for this revision.
 }
 
 func NewRevision(dump *DumpReader) (rev *Revision, err error) {
@@ -25,23 +22,22 @@ func NewRevision(dump *DumpReader) (rev *Revision, err error) {
 	}
 
 	if rev.Headers, err = NewHeaders(dump); err != nil {
-		// Not an error, just no more revisions.
-		if err == io.EOF {
-			return nil, nil
-		}
-		return nil, err
+		return nil, fmt.Errorf("revision headers: %w", err)
 	}
 
 	// Extract the revision number.
 	if rev.Number, err = rev.Headers.Int(RevisionNumberHeader); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("revision header: %w", err)
 	}
 
 	// Find the length of the property data.
 	var propLen int
 	propLen, err = rev.Headers.Int(PropContentLengthHeader)
 	if err != nil {
-		return nil, fmt.Errorf("r%d: %w", err)
+		return nil, err
+	}
+	if propLen == 0 {
+		panic("zero length properties")
 	}
 
 	// Construct the property table.
@@ -51,9 +47,13 @@ func NewRevision(dump *DumpReader) (rev *Revision, err error) {
 
 	// Load it in: make this async later if we need the perf.
 	if err = rev.Properties.Load(); err != nil {
-		return nil, fmt.Errorf("r%d: loading properties: %w")
+		return nil, fmt.Errorf("loading properties: %w", err)
 	}
 
+	// Empty line between revision header and nodes.
+	if !dump.ExpectAndConsume("\n") {
+		return nil, fmt.Errorf("missing terminating newline after revision header")
+	}
 	return rev, nil
 }
 
@@ -67,14 +67,62 @@ func (r *Revision) Load() (err error) {
 	nodes := make([]*Node, 0, 4096)
 	var node *Node
 
-	for r.dump.HasPrefix(NodePathHeader) {
+	for {
+		if !r.dump.HasPrefix(NodePathHeader) {
+			break
+		}
 		if node, err = NewNode(r); err != nil {
-			return fmt.Errorf("r%d: %w", r.Number, err)
+			return err
 		}
 		nodes = append(nodes, node)
 	}
 
 	r.Nodes = append(r.Nodes, nodes...)
 
+	r.endOffset = r.dump.Tell()
+
+	r.dump.ExpectAndConsume("\n")
+
 	return nil
+}
+
+func (r *Revision) FindNode(predicate func(*Node) bool) *Node {
+	for _, node := range r.Nodes {
+		if predicate(node) {
+			return node
+		}
+	}
+	return nil
+}
+
+// GetNodeIndexesWithPrefix returns a list of node indexes that match the given path-
+// component prefix (distinguishing Model/ from Models/)
+func (r *Revision) GetNodeIndexesWithPrefix(prefix string) []int {
+	nodes := make([]int, 0)
+	for idx, node := range r.Nodes {
+		if MatchPathPrefix(node.Path(), prefix) {
+			nodes = append(nodes, idx)
+		}
+	}
+	return nodes
+}
+
+func (r *Revision) Encode(encoder *Encoder) {
+	// Encode the headers ready for writing in binary form.
+	properties := r.Properties.Bytes()
+
+	// Update the length headers, incase the length changed.
+	r.Headers.Set(PropContentLengthHeader, fmt.Sprintf("%d", len(properties)))
+	r.Headers.Set(ContentLengthHeader, fmt.Sprintf("%d", len(properties)))
+
+	// Encode the headers.
+	r.Headers.Encode(encoder)
+
+	// Write the properties as binary data, with a trailing \n.
+	encoder.Write(properties)
+	encoder.Write([]byte("\n"))
+
+	for _, node := range r.Nodes {
+		node.Encode(encoder)
+	}
 }

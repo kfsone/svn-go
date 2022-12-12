@@ -15,6 +15,8 @@ type Node struct {
 	Kind   NodeKind   // Kind of node (file/dir).
 
 	data []byte // Raw binary data for the node.
+
+	newlines int
 }
 
 func NewNode(rev *Revision) (nodePtr *Node, err error) {
@@ -50,6 +52,10 @@ func NewNode(rev *Revision) (nodePtr *Node, err error) {
 		return nil, fmt.Errorf("%s: %w", path, io.ErrUnexpectedEOF)
 	}
 
+	for rev.dump.ExpectAndConsume("\n") {
+		node.newlines++
+	}
+
 	return node, nil
 }
 
@@ -62,9 +68,11 @@ func checkNodeHeaders(node *Node) (err error) {
 		return err
 	}
 
+	isDelete := node.Action == NodeActionDelete
+
 	kind, err := node.Headers.String(NodeKindHeader)
 	// delete doesn't tell us what kind of node is being deleted.
-	if err != nil && !(errors.Is(err, ErrMissingField) && node.Action == NodeActionDelete) {
+	if err != nil && !(isDelete && errors.Is(err, ErrMissingField)) {
 		return err
 	}
 	if kind != "" {
@@ -81,14 +89,18 @@ func checkNodeHeaders(node *Node) (err error) {
 	}
 
 	// Some other integer values we need checked.
-	if _, err := node.Headers.Int(PropContentLengthHeader); err != nil {
-		return fmt.Errorf("%s: %w", PropContentLengthHeader, err)
-	}
-	if _, err := node.Headers.Int(TextContentLengthHeader); err != nil {
-		return fmt.Errorf("%s: %w", TextContentLengthHeader, err)
-	}
-	if _, err := node.Headers.Int(ContentLengthHeader); err != nil {
-		return fmt.Errorf("%s: %w", ContentLengthHeader, err)
+	if !isDelete {
+		// These are only present when there is a related block.
+		if _, err := node.Headers.Int(PropContentLengthHeader); err != nil && !errors.Is(err, ErrMissingField) {
+			return err
+		}
+		if _, err := node.Headers.Int(TextContentLengthHeader); err != nil && !errors.Is(err, ErrMissingField) {
+			return err
+		}
+		// Not unusual for this to be absent in the case of copies or branches with no changes.
+		if _, err := node.Headers.Int(ContentLengthHeader); err != nil && !errors.Is(err, ErrMissingField) {
+			return err
+		}
 	}
 
 	return nil
@@ -108,4 +120,27 @@ func (n *Node) Branched() (revision int, path string, ok bool) {
 		}
 	}
 	return
+}
+
+func (n *Node) Encode(encoder *Encoder) {
+	// Re-encode the properties blob so we can get the length.
+	properties := n.Properties.Bytes()
+
+	// Update the length headers accordingly.
+	n.Headers.Set(PropContentLengthHeader, fmt.Sprintf("%d", len(properties)))
+	n.Headers.Set(ContentLengthHeader, fmt.Sprintf("%d", len(properties)+len(n.data)))
+
+	// Now we can encode the headers.
+	n.Headers.Encode(encoder)
+
+	// Write the properties as an opaque binary blob, followed by a trailing \n
+	encoder.Write(properties)
+	encoder.Newlines(1)
+
+	// Finally we can write the raw data.
+	if len(n.data) > 0 {
+		encoder.Write(n.data)
+	}
+
+	encoder.Newlines(n.newlines)
 }

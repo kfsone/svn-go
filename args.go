@@ -45,9 +45,4 @@ func parseCommandLine() {
 		fmt.Println("-quiet and -verbose are mutually exclusive")
 		os.Exit(1)
 	}
-
-	// if -stop is non-negative, replace stopAt.
-	if *stopRevision >= 0 {
-		stopAt = *stopRevision
-	}
 }

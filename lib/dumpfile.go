@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"github.com/edsrzf/mmap-go"
 	"os"
-	"strconv"
 )
 
 type DumpFile struct {
 	filename string    // Remembers the file path/name we sourced from.
 	data     mmap.MMap // The full memory mapped view of the data.
-	buffer   []byte    // Read buffer, manipulated by DumpReader.
 
 	DumpFormat int
 	UUID       string
@@ -42,8 +40,8 @@ func NewDumpFile(filename string) (*DumpFile, error) {
 		data:     data,
 	}
 
-	if df.DumpFormat, df.UUID, df.buffer, err = parseDumpPreamble(data); err != nil {
-		return nil, fmt.Errorf("%w: %s", err, filename)
+	if err = checkDumpFormat(data); err != nil {
+		return nil, err
 	}
 
 	return df, nil
@@ -53,35 +51,18 @@ func (df *DumpFile) Close() error {
 	return df.data.Unmap()
 }
 
-var dumpHeaderSplit = []byte{'\n', '\n'}
-var windowsLineEnd = []byte{'\r'}
-
-func parseDumpPreamble(source []byte) (format int, uuid string, body []byte, err error) {
-	if format, body, err = readDumpHeaderLine(VersionStringHeader, strconv.Atoi, source); err == nil {
-		uuid, body, err = readDumpHeaderLine(UUIDHeader, func(s string) (string, error) { return s, nil }, body)
+func checkDumpFormat(source []byte) (err error) {
+	if !bytes.HasPrefix(source, []byte(VersionStringHeader)) {
+		return ErrInvalidDumpFile
 	}
-	return
-}
-
-func readDumpHeaderLine[T any](key string, convert func(string) (T, error), source []byte) (value T, body []byte, err error) {
-	err = ErrInvalidDumpFile
-	// Dump headers have double newlines.
-	eol := bytes.Index(source, dumpHeaderSplit)
-
-	if eol != -1 {
-		line := source[:eol]
-		body = source[eol+len(dumpHeaderSplit):]
-
-		var headerKey, headerValue string
-		headerKey, headerValue, err = ReadHeader(line)
-		if err == nil && headerKey == key {
-			value, err = convert(headerValue)
-		}
-		// Before we finish, regardless of convert, check if this is actually a windows-encoded dump.
-		if bytes.HasSuffix(line, windowsLineEnd) {
-			err = ErrWindowsDumpFile
-		}
+	eol := bytes.IndexRune(source, '\n')
+	if eol < 0 {
+		return ErrInvalidDumpFile
+	}
+	// Because of the prefix check, we know eol > 1.
+	if source[eol-1] == '\r' {
+		return ErrWindowsDumpFile
 	}
 
-	return
+	return nil
 }
