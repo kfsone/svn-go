@@ -9,12 +9,6 @@ import (
 // -dump: required, specifies name of the dump file to read.
 var dumpFileName = flag.String("dump", "svn.dump", "path to dump file")
 
-// -out: optional, specifies the path to write the dump back to.
-var outDumpName = flag.String("out", "", "file to emit modified dump to")
-
-// -stop: optional, only read upto (including) this revision.
-var stopRevision = flag.Int("stop", -1, "stop after loading this revision")
-
 // -rules: optional, specifies a rules file to work with. default: rules.yml
 var rulesFile = flag.String("rules", "rules.yml", "path to rules file")
 
@@ -23,6 +17,15 @@ var verbose = flag.Bool("verbose", false, "emit more output")
 
 // -quiet: suppress verbose output.
 var quiet = flag.Bool("quiet", false, "suppress more output")
+
+// -outfile: optional, write the entire dump to one file
+var outFilename = flag.String("outfile", "", "specify a single file/path to write the entire dump to")
+
+// -outdir: generate dump files in this directory.
+var outDir = flag.String("outdir", "", "specify a directory to write dump file(s) to")
+
+// -pathinfo: displays a list of all the paths that are created (and when) in the dump.
+var pathInfo = flag.Bool("pathinfo", false, "display paths created in the loaded dump")
 
 func parseCommandLine() {
 	// Process command line flags.
@@ -38,6 +41,11 @@ func parseCommandLine() {
 	// '-dump' is required.
 	if dumpFileName == nil || *dumpFileName == "" {
 		fmt.Println("missing -dump filename")
+		os.Exit(1)
+	}
+
+	if *outFilename != "" && *outDir != "" {
+		fmt.Println("-outfile and -outdir are mutually exclusive")
 		os.Exit(1)
 	}
 

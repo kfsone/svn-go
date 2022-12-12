@@ -12,9 +12,8 @@ type DumpReader struct {
 	buffer []byte // Read buffer, manipulated by DumpReader.
 }
 
-// NewDumpReader wraps a DumpFile in a DumpReader for convenience, as long as either
-// the given format/uuid are defaulted (0/"") or match the DumpFile's values.
-func NewDumpReader(df *DumpFile, format int, uuid string) (dump *DumpReader, err error) {
+// NewDumpReader wraps a DumpFile in a DumpReader for convenience.
+func NewDumpReader(df *DumpFile) (dump *DumpReader, err error) {
 	dump = &DumpReader{DumpFile: df, buffer: df.data}
 
 	// The dump format starts with two header blocks that happen to contain only
@@ -23,21 +22,13 @@ func NewDumpReader(df *DumpFile, format int, uuid string) (dump *DumpReader, err
 	//	 \n
 	//	 UUID: <uuid>\n
 	//	 \n
-	df.DumpFormat, err = getDumpHeader(dump, VersionStringHeader, strconv.Atoi)
-	if err != nil {
+	if df.DumpFormat, err = getDumpHeader(dump, VersionStringHeader, strconv.Atoi); err != nil {
 		return nil, err
-	}
-	if format != 0 && format != df.DumpFormat {
-		return nil, fmt.Errorf("%w: format version: expected %d, got %d", ErrDumpHeaderMismatch, format, df.DumpFormat)
 	}
 
 	// Parse the repository header which should contain just the UUID.
-	df.UUID, err = getDumpHeader(dump, UUIDHeader, func(s string) (string, error) { return s, nil })
-	if err != nil {
+	if df.UUID, err = getDumpHeader(dump, UUIDHeader, func(s string) (string, error) { return s, nil }); err != nil {
 		return nil, err
-	}
-	if uuid != "" && uuid != df.UUID {
-		return nil, fmt.Errorf("%w: repository UUID: expected %s, got %s", ErrDumpHeaderMismatch, uuid, df.UUID)
 	}
 
 	return dump, nil

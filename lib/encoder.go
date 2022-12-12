@@ -11,7 +11,7 @@ type Encoder struct {
 
 func NewEncoder(w io.Writer) *Encoder {
 	e := &Encoder{
-		sink: make(chan []byte, 32),
+		sink: make(chan []byte, 4),
 	}
 
 	go func() {
@@ -24,6 +24,10 @@ func NewEncoder(w io.Writer) *Encoder {
 	}()
 
 	return e
+}
+
+func (e *Encoder) Close() {
+	close(e.sink)
 }
 
 func (e *Encoder) Write(data []byte) {

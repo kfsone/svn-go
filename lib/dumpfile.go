@@ -2,14 +2,17 @@ package svn
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"github.com/edsrzf/mmap-go"
+	"io"
 	"os"
 )
 
 type DumpFile struct {
-	filename string    // Remembers the file path/name we sourced from.
-	data     mmap.MMap // The full memory mapped view of the data.
+	Filename  string      // Remembers the file path/name we sourced from.
+	data      mmap.MMap   // The full memory mapped view of the data.
+	Revisions []*Revision // Which revisions were in this file.
 
 	DumpFormat int
 	UUID       string
@@ -36,8 +39,9 @@ func NewDumpFile(filename string) (*DumpFile, error) {
 	}
 
 	df := &DumpFile{
-		filename: filename,
-		data:     data,
+		Filename:  filename,
+		data:      data,
+		Revisions: make([]*Revision, 0),
 	}
 
 	if err = checkDumpFormat(data); err != nil {
@@ -45,6 +49,45 @@ func NewDumpFile(filename string) (*DumpFile, error) {
 	}
 
 	return df, nil
+}
+
+func (df *DumpFile) LoadRevisions() (err error) {
+	dump, err := NewDumpReader(df)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+
+	// we'll need to close that at the end.
+	defer func() {
+		if err := dump.Close(); err != nil {
+			panic(fmt.Errorf("closing reader: %w", err))
+		}
+	}()
+
+	revisions := make([]*Revision, 0, 4096)
+
+	for revNo := 0; !dump.IsEOI(); revNo++ {
+		rev, err := NewRevision(dump)
+		if err != nil {
+			// SVN dump format doesn't provide a revision count, so we're just expecting
+			// to hit EOF at some point.
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			return fmt.Errorf("revision #%d: %w", revNo, err)
+		}
+
+		if err = rev.Load(); err != nil {
+			return fmt.Errorf("r%d: %w", rev.Number, err)
+		}
+
+		revisions = append(revisions, rev)
+	}
+
+	// The dumpfile is now a keeper.
+	df.Revisions = append(df.Revisions, revisions...)
+
+	return nil
 }
 
 func (df *DumpFile) Close() error {

@@ -3,7 +3,6 @@ package svn
 import (
 	"errors"
 	"fmt"
-	"io"
 )
 
 type Node struct {
@@ -48,8 +47,10 @@ func NewNode(rev *Revision) (nodePtr *Node, err error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 
-	if !rev.dump.Discard(bodyLen) {
-		return nil, fmt.Errorf("%s: %w", path, io.ErrUnexpectedEOF)
+	if bodyLen > 0 {
+		if node.data, err = rev.dump.Read(bodyLen); err != nil {
+			return nil, fmt.Errorf("%s: content: %w", path, err)
+		}
 	}
 
 	for rev.dump.ExpectAndConsume("\n") {
@@ -135,7 +136,6 @@ func (n *Node) Encode(encoder *Encoder) {
 
 	// Write the properties as an opaque binary blob, followed by a trailing \n
 	encoder.Write(properties)
-	encoder.Newlines(1)
 
 	// Finally we can write the raw data.
 	if len(n.data) > 0 {

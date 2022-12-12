@@ -1,11 +1,6 @@
 package svn
 
-import (
-	"errors"
-	"fmt"
-	"io"
-	"math"
-)
+import "fmt"
 
 // Repos represents the loaded model of a Subversion repository.
 
@@ -41,80 +36,53 @@ func (r *Repos) Close() error {
 	return nil
 }
 
-func (r *Repos) LoadRevisions(filename string, maxRev int) (err error) {
-	dumpfile, err := NewDumpFile(filename)
-	if err != nil {
-		return err
+func (r *Repos) AddDumpFile(dumpfile *DumpFile) (err error) {
+	if len(dumpfile.Revisions) == 0 {
+		return fmt.Errorf("dump file contains no revisions")
+	}
+	if dumpfile.Revisions[0].Number != len(r.Revisions) {
+		return fmt.Errorf("revisions out of sequence: expected %d; got %d", len(r.Revisions), dumpfile.Revisions[0].Number)
 	}
 
-	dump, err := NewDumpReader(dumpfile, r.DumpFormat, r.UUID)
-	if err != nil {
-		return fmt.Errorf("open: %w", err)
-	}
-	defer func() {
-		if err := dump.Close(); err != nil {
-			panic(fmt.Errorf("closing reader: %w", err))
+	if r.DumpFormat != 0 {
+		if r.DumpFormat != dumpfile.DumpFormat {
+			return fmt.Errorf("%w: dump format mismatch: %d != %d", ErrInvalidDumpFile, r.DumpFormat, dumpfile.DumpFormat)
 		}
-	}()
-
-	// Make sure the dumpfile actually contains anything.
-	revisions := make([]*Revision, 0, 4096)
-	if maxRev < 0 {
-		maxRev = math.MaxInt
-	}
-	for revNo := len(r.Revisions); revNo <= maxRev; revNo++ {
-		rev, err := NewRevision(dump)
-		if err != nil {
-			// SVN dump format doesn't provide a revision count, so we're just expecting
-			// to hit EOF at some point.
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return fmt.Errorf("r%d: %w", revNo, err)
+		if r.UUID != dumpfile.UUID {
+			return fmt.Errorf("%w: repository UUID mismatch: %s != %s", ErrInvalidDumpFile, r.UUID, dumpfile.UUID)
 		}
-
-		if rev.Number != revNo {
-			return fmt.Errorf("%w: out-of-sequence revision: expected %d, got %d", ErrDumpHeaderMismatch, revNo, rev.Number)
-		}
-
-		if err = rev.Load(); err != nil {
-			return fmt.Errorf("r%d: %w", revNo, err)
-		}
-
-		revisions = append(revisions, rev)
+	} else {
+		r.DumpFormat = dumpfile.DumpFormat
+		r.UUID = dumpfile.UUID
 	}
 
-	// The dumpfile is now a keeper.
+	r.Revisions = append(r.Revisions, dumpfile.Revisions...)
 	r.DumpFiles = append(r.DumpFiles, dumpfile)
-
-	// Add the revisions to our own.
-	r.Revisions = append(r.Revisions, revisions...)
-
-	if r.DumpFormat == 0 {
-		r.DumpFormat = dump.DumpFormat
-		r.UUID = dump.UUID
-	}
 
 	return nil
 }
 
-func (r *Repos) Encode(encoder *Encoder, start, end int) <-chan float64 {
+type EncodingProgress struct {
+	Revision int
+	Percent  float64
+}
+
+func (r *Repos) Encode(encoder *Encoder, start, end int) <-chan EncodingProgress {
 	// Encode the header.
 	// We currently guarantee there are only these two headers.
 	encoder.Fprintf("%s: %d\n\n%s: %s\n\n", VersionStringHeader, r.DumpFormat, UUIDHeader, r.UUID)
 
-	ch := make(chan float64)
+	ch := make(chan EncodingProgress, 4)
 
 	go func() {
 		defer close(ch)
 		r, encoder, start, end := r, encoder, start, end
-		total := float64(end - start + 1)
+		total := float64(r.GetHead() + 1)
 
 		for i := start; i <= end; i++ {
-			ch <- float64(end-start) * 100.0 / total
+			ch <- EncodingProgress{i, float64(i) * 100.0 / total}
 			r.Revisions[i].Encode(encoder)
 		}
-		ch <- 100.0
 	}()
 
 	return ch

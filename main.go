@@ -36,11 +36,11 @@ package main
 import (
 	"bytes"
 	"fmt"
+	svn "github.com/kfsone/svn-go/lib"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
-
-	svn "github.com/kfsone/svn-go/lib"
 )
 
 type IterDirection int
@@ -109,11 +109,11 @@ func Info(format string, args ...interface{}) {
 
 func run() error {
 	// Determine what files we're going to read.
-	dumps, err := filepath.Glob(*dumpFileName)
+	filenames, err := filepath.Glob(*dumpFileName)
 	if err != nil {
 		return fmt.Errorf("invalid dump file/glob: %s: %w", *dumpFileName, err)
 	}
-	if len(dumps) == 0 {
+	if len(filenames) == 0 {
 		return fmt.Errorf("no matching dump files found: %s", *dumpFileName)
 	}
 
@@ -123,11 +123,28 @@ func run() error {
 		return err
 	}
 
-	for _, filename := range dumps {
-		Info("Loading dump file: %s", filename)
-		if err := status.LoadRevisions(filename, *stopRevision); err != nil {
+	Info("Loading %d dump files", len(filenames))
+	for _, filename := range filenames {
+		Log("Loading dump file: %s", filename)
+		dumpfile, err := svn.NewDumpFile(filename)
+		if err != nil {
 			return err
 		}
+		if err := dumpfile.LoadRevisions(); err != nil {
+			return err
+		}
+		if err := status.AddDumpFile(dumpfile); err != nil {
+			return err
+		}
+	}
+
+	if *pathInfo {
+		dumpPathInfo(status)
+	}
+
+	Info("Normalizing")
+	for _, rev := range status.Revisions {
+		processRevHelper(rev, status)
 	}
 
 	Info("Analyzing")
@@ -135,16 +152,20 @@ func run() error {
 		return err
 	}
 
-	if *outDumpName != "" {
-		out, err := os.OpenFile(*outDumpName, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-		if err != nil {
-			return err
+	if *outFilename != "" {
+		err = singleDump(*outFilename, status, 0, status.GetHead())
+		if err == nil {
+			fmt.Println("100% Complete")
 		}
-		defer out.Close()
+	} else if *outDir != "" {
+		err = multiDump(*outDir, status)
+		if err == nil {
+			fmt.Println("100% Complete")
+		}
+	}
 
-		Info("Writing to %s", *outDumpName)
-		enc := svn.NewEncoder(out)
-		status.Encode(enc, 0, status.GetHead())
+	if err != nil {
+		return err
 	}
 
 	Info("Finished")
@@ -152,12 +173,59 @@ func run() error {
 	return nil
 }
 
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
+func singleDump(filename string, status *Status, start, end int) error {
+	Info("Dumping r%9d:%9d -> %s", start, end, filename)
+
+	out, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		must(out.Close())
+	}()
+
+	enc := svn.NewEncoder(out)
+	defer enc.Close()
+
+	for progress := range status.Encode(enc, start, end) {
+		fmt.Printf("%5.2f%% r%d\r", progress.Percent, progress.Revision)
+	}
+	fmt.Printf("%6s %11s\r", "", "")
+
+	return nil
+}
+
+func multiDump(outPath string, status *Status) error {
+	// MkdirAll does nothing if the path already exists as a directory.
+	if err := os.MkdirAll(outPath, 0700); err != nil {
+		return err
+	}
+
+	for _, dumpfile := range status.DumpFiles {
+		dumpFilename := filepath.Join(outPath, filepath.Base(dumpfile.Filename))
+		start, end := dumpfile.Revisions[0].Number, dumpfile.Revisions[len(dumpfile.Revisions)-1].Number
+		if err := singleDump(dumpFilename, status, start, end); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
 func analyze(status *Status) error {
 	// Find branches that end up in a retrofit path but started out outside of it.
+	refits := 0
 	for refitNode := range getRefitBranches(status) {
 		oldRev, oldPath, _ := refitNode.Branched()
 		newPath := refitNode.Path()
 		Info("Refit: %s becomes %s at r%d", oldPath, newPath, oldRev)
+		refits++
 
 		// Work backwards until we find where this node was created, and replace any references to it with the new path.
 		refitRev := refitNode.Revision
@@ -202,6 +270,12 @@ func analyze(status *Status) error {
 				break
 			}
 		}
+	}
+
+	if refits > 0 {
+		Info("%d branch refits required", refits)
+	} else {
+		Info("No branch refits required")
 	}
 
 	return nil
@@ -257,4 +331,49 @@ func getRefitBranches(status *Status) <-chan *svn.Node {
 	}()
 
 	return out
+}
+
+func dumpPathInfo(status *Status) {
+	originals := make(map[string]int)
+	finals := make(map[string]int)
+
+	for _, rev := range status.Revisions {
+		for _, node := range rev.Nodes {
+			if node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionAdd {
+				path := node.Path()
+				if _, present := originals[path]; !present {
+					originals[path] = rev.Number
+				}
+				finals[path] = rev.Number
+			}
+		}
+	}
+
+	if len(originals) == 0 {
+		fmt.Println("-- No directories created.")
+		return
+	}
+
+	paths := make([]string, 0, len(originals))
+	maxLen := 0
+	for _, path := range paths {
+		paths = append(paths, path)
+		if len(path) > maxLen {
+			maxLen = len(path)
+		}
+	}
+	sort.Strings(paths)
+
+	format := fmt.Sprintf("%%-%ds: %%s\n", maxLen)
+	for _, path := range paths {
+		original, final := originals[path], finals[path]
+		detail := ""
+		if original == final {
+			detail = fmt.Sprintf("%d and done", original)
+		} else {
+			detail = fmt.Sprintf("%d, ..., %d", original, final)
+		}
+
+		fmt.Printf(format, path, detail)
+	}
 }
