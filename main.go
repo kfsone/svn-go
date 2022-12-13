@@ -36,11 +36,12 @@ package main
 import (
 	"bytes"
 	"fmt"
-	svn "github.com/kfsone/svn-go/lib"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	svn "github.com/kfsone/svn-go/lib"
 )
 
 type IterDirection int
