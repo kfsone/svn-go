@@ -334,6 +334,7 @@ func getRefitBranches(status *Status) <-chan *svn.Node {
 }
 
 func dumpPathInfo(status *Status) {
+	fmt.Printf("-- Path Info --\n")
 	originals := make(map[string]int)
 	finals := make(map[string]int)
 
@@ -356,7 +357,7 @@ func dumpPathInfo(status *Status) {
 
 	paths := make([]string, 0, len(originals))
 	maxLen := 0
-	for _, path := range paths {
+	for path := range originals {
 		paths = append(paths, path)
 		if len(path) > maxLen {
 			maxLen = len(path)
@@ -369,9 +370,9 @@ func dumpPathInfo(status *Status) {
 		original, final := originals[path], finals[path]
 		detail := ""
 		if original == final {
-			detail = fmt.Sprintf("%d and done", original)
+			detail = fmt.Sprintf("r%d and done", original)
 		} else {
-			detail = fmt.Sprintf("%d, ..., %d", original, final)
+			detail = fmt.Sprintf("r%d, ..., r%d", original, final)
 		}
 
 		fmt.Printf(format, path, detail)

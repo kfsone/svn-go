@@ -7,10 +7,10 @@ import (
 )
 
 // -dump: required, specifies name of the dump file to read.
-var dumpFileName = flag.String("dump", "svn.dump", "path to dump file")
+var dumpFileName = flag.String("read", "svn.dump", "path or glob of dump file(s) to be read")
 
 // -rules: optional, specifies a rules file to work with. default: rules.yml
-var rulesFile = flag.String("rules", "rules.yml", "path to rules file")
+var rulesFile = flag.String("rules", "", "optional path to rules file")
 
 // -verbose: crank up the output.
 var verbose = flag.Bool("verbose", false, "emit more output")
