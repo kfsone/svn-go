@@ -120,7 +120,7 @@ func (r *Revision) Encode(encoder *Encoder) {
 
 	// Write the properties as binary data, with a trailing \n.
 	encoder.Write(properties)
-	encoder.Write([]byte("\n"))
+	encoder.Write([]byte{'\n'})
 
 	for _, node := range r.Nodes {
 		node.Encode(encoder)

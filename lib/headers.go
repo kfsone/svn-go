@@ -108,9 +108,17 @@ func (h *Headers) Set(key, value string) {
 
 func (h *Headers) Encode(encoder *Encoder) {
 	// Write the headers in the original order
+	buffer := make([]byte, 0, len(h.index)*80)
 	for _, key := range h.index {
-		encoder.Fprintf("%s: %s\n", key, h.table[key])
+		buffer = append(buffer, []byte(key)...)
+		buffer = append(buffer, headerSplit...)
+		buffer = append(buffer, []byte(h.table[key])...)
+		buffer = append(buffer, '\n')
 	}
 
-	encoder.Newlines(h.newlines)
+	for i := 0; i < h.newlines; i++ {
+		buffer = append(buffer, '\n')
+	}
+
+	encoder.Write(buffer)
 }
