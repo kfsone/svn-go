@@ -4,9 +4,10 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"github.com/edsrzf/mmap-go"
 	"io"
 	"os"
+
+	"github.com/edsrzf/mmap-go"
 )
 
 type DumpFile struct {
@@ -91,6 +92,13 @@ func (df *DumpFile) LoadRevisions() (err error) {
 }
 
 func (df *DumpFile) Close() error {
+	if df.data == nil {
+		return nil
+	}
+	defer func() {
+		df.data = nil
+	}()
+
 	return df.data.Unmap()
 }
 

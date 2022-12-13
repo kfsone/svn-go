@@ -143,7 +143,7 @@ func run() error {
 		dumpPathInfo(status)
 	}
 
-	Info("Normalizing")
+	Info("Normalizing %d revisions", len(status.Revisions))
 	for _, rev := range status.Revisions {
 		processRevHelper(rev, status)
 	}
@@ -213,6 +213,15 @@ func multiDump(outPath string, status *Status) error {
 		start, end := dumpfile.Revisions[0].Number, dumpfile.Revisions[len(dumpfile.Revisions)-1].Number
 		if err := singleDump(dumpFilename, status, start, end); err != nil {
 			return err
+		}
+		if err := dumpfile.Close(); err != nil {
+			return fmt.Errorf("closing dump files: %w", err)
+		}
+		if *removeOriginals {
+			Log("-> Removing original dump file: %s", dumpfile.Filename)
+			if err := os.Remove(dumpfile.Filename); err != nil {
+				fmt.Printf("** error removing original dump file: %s\n", err)
+			}
 		}
 	}
 
@@ -319,8 +328,9 @@ func getRefitBranches(status *Status) <-chan *svn.Node {
 		out := out
 		defer close(out)
 		for _, node := range status.branchAdds {
+			path := node.Path()
 			for _, prefix := range status.rules.RetroPaths {
-				if svn.MatchPathPrefix(node.Path(), prefix) {
+				if svn.MatchPathPrefix(path, prefix) {
 					_, branchPath, _ := node.Branched()
 					if !svn.MatchPathPrefix(branchPath, prefix) {
 						out <- node

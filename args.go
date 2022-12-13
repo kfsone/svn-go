@@ -24,6 +24,9 @@ var outFilename = flag.String("outfile", "", "specify a single file/path to writ
 // -outdir: generate dump files in this directory.
 var outDir = flag.String("outdir", "", "specify a directory to write dump file(s) to")
 
+// -remove-originals: remove the original dump files once they are regenerated. requires -outdir
+var removeOriginals = flag.Bool("remove-originals", false, "remove original dump files once they are regenerated. requires -outdir")
+
 // -pathinfo: displays a list of all the paths that are created (and when) in the dump.
 var pathInfo = flag.Bool("pathinfo", false, "display paths created in the loaded dump")
 
@@ -46,6 +49,11 @@ func parseCommandLine() {
 
 	if *outFilename != "" && *outDir != "" {
 		fmt.Println("-outfile and -outdir are mutually exclusive")
+		os.Exit(1)
+	}
+
+	if *removeOriginals && *outDir == "" {
+		fmt.Println("-remove-originals requires -outdir")
 		os.Exit(1)
 	}
 

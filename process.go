@@ -137,7 +137,7 @@ func applyFilter(rev *svn.Revision, filters []string) {
 		for _, node := range rev.Nodes {
 			_, branchedPath, branched := node.Branched()
 			if branched && svn.MatchPathPrefix(branchedPath, filter) {
-				panic(fmt.Errorf("filter:%s would break history of %s %s %s at r%d", filter, *node.Action, *node.Kind, node.Path, rev.Number))
+				panic(fmt.Errorf("filter:%s would break history of %s %s %s at r%d", filter, *node.Action, *node.Kind, node.Path(), rev.Number))
 			}
 		}
 	}
@@ -149,7 +149,7 @@ func applyFilter(rev *svn.Revision, filters []string) {
 			if !filtered[i] {
 				nodes = append(nodes, node)
 			} else {
-				Info("r%d: filtering node %s %s %s", rev.Number, *node.Action, *node.Kind, node.Path)
+				Info("r%d: filtering node %s %s %s", rev.Number, *node.Action, *node.Kind, node.Path())
 			}
 		}
 		rev.Nodes = nodes
