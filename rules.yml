@@ -10,17 +10,23 @@ replace:
   '/repos:': '/:'
   'repos/':  ''
 
-# Say at some point in your history you moved everything from
-# a simple single-project structure:
+# Say at some point in your history you moved everything from a simple single-project structure:
 #    r001 : /trunk, /branches, ...
+#
 # to a multi-project structure:
+#
 #    r599 : /trunk -> /projects/Proj01/trunk
-# if you specify "/projects/Proj01" as a retrofit path, the tool
-# will find the revisions where child folders are moved into the
-# retfit path and push those moves back in history so that the
-# original folders simply become their present locations, and
-# update all path references in-between to reflect the move.
+#
+# specify "projects/Proj01" as a retrofit path and the tool will find the revisions where
+# child folders are moved into the retrofit path then push those moves back in history so
+# the original folders simply become their present locations.
+#
+# All path names and branch references will be adjusted, and replacements will be made
+# in any retrofit-props metadata fields.
+#
+# Note: paths here are *post* replace.
 retrofit-paths:
+  # repos/Evil01 before replace
   - Evil01
 
 # List of properties where changes of retrofit path should be applied.
