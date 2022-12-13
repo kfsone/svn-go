@@ -1,19 +1,14 @@
-# Replace is applied first, so be sure to use the replaced paths
-# in other rules.
-replace:
-  '/repos/': '/'
-  '/repos:': '/:'
-  'repos/':  ''
-
-# Identify you call the standard svn folders.
+# Identify what you call the standard svn folders.
 convention:
   trunk: Trunk
   branches: Branches
   tags:  Tags
 
-filter:
-  - mappings
-  - repos
+# Replace is applied first, so be sure to use the replaced paths in other rules.
+replace:
+  '/repos/': '/'
+  '/repos:': '/:'
+  'repos/':  ''
 
 # Say at some point in your history you moved everything from
 # a simple single-project structure:
@@ -28,6 +23,11 @@ filter:
 retrofit-paths:
   - Evil01
 
+# List of properties where changes of retrofit path should be applied.
+retrofit-props:
+  - svn:mergeinfo
+
+# For each files/props pair, remove the listed properties from all files that match the regex in files.
 strip-props:
   - files: "^.*\\.(cpp|h|hpp|cxx|c|hxx|te?xt|el|template|md|frag|vert|ac|am|l|lpp|y|ypp|sln|glsl|expected|def|blueprint|in|sub|yml|yaml|xml|lib|a|o|mm|ttf|font|jpg|jpeg|tga|png|ma|psd|TGA|ini|user|strings|hdr|pfx|pkg|pas|fla|pbxproj|mb|mtl|la|sources|m|zip|rar|gypi|tif|mk|mp4|ogg|bundle|db|sed|scm|otf|html?|svg|TE?XT|props|json|css|bdgcfg|cfg|keytab|spec|client|rc|vcxprop|mp3|gz|tar|bz2|pc|mel|bmp|dist|sysconfig|csv|tsv|yy|msg|co?nf|wav|ico|m4|s|dxy|inl|mesh|vcproj|plis|ref|MF|cmake|3DS|pem|crt|guess|asm|valgrind|vsprops|swig|tmpl|bson|obj|buildinfo|status|bak|doctest|ipp|1|lightfield|xmind|tpl|make|err|tbl|d-mongod|8-5|shadegraph|ZTL|8-12|ll|8|d|vcxproj|mak|manifest|swatch|mkdoc|plist|v8|p12|disabled|8-8|suppressions|order|mdp|swatches|key|init|default|lightField|pdf|txt_original|rst|cc|dmp|smoke|upstart|filters|v2|css_t|ai|pump|jar|strongtalk|java|gyp|js)$"
     props: [ "svn:executable" ]
@@ -36,8 +36,8 @@ strip-props:
   - files: "GLSLOptimizer/.*builtins/ir"
     props: [ "svn:executable" ]
 
-# List of properties where changes of retrofit path should be applied.
-retrofit-props:
-  - svn:mergeinfo
-
-creation-revision: 1
+# These are (root relative) paths that will be discarded. This is done *after*
+# any retrofit so it can be used to delete left-over folders.
+filter:
+  - mappings
+  - repos
