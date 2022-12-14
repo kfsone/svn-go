@@ -13,6 +13,9 @@ type Node struct {
 	Action NodeAction // Action taken on the node (add/change/delete/replace).
 	Kind   NodeKind   // Kind of node (file/dir).
 
+	BranchRev  int    // Revision branched from (or 0)
+	BranchPath string // Path branched from (if BranchRev > 0)
+
 	data []byte // Raw binary data for the node.
 
 	newlines int
@@ -84,9 +87,15 @@ func checkNodeHeaders(node *Node) (err error) {
 
 	// Check other possible fields.
 	if node.Headers.Has(NodeCopyfromPathHeader) {
-		if _, err := node.Headers.Int(NodeCopyfromRevHeader); err != nil {
+		var branchRev int
+		if branchRev, err = node.Headers.Int(NodeCopyfromRevHeader); err != nil {
 			return err
 		}
+		var branchPath string
+		if branchPath, err = node.Headers.String(NodeCopyfromPathHeader); err != nil {
+			return err
+		}
+		node.BranchRev, node.BranchPath = branchRev, branchPath
 	}
 
 	// Some other integer values we need checked.
@@ -114,13 +123,10 @@ func (n *Node) Path() string {
 
 // Branched returns the source revision and path of the node if it was branched.
 func (n *Node) Branched() (revision int, path string, ok bool) {
-	var err error
-	if revision, err = n.Headers.Int(NodeCopyfromRevHeader); err == nil {
-		if path, err = n.Headers.String(NodeCopyfromPathHeader); err == nil {
-			ok = true
-		}
+	if n.BranchRev <= 0 {
+		return 0, "", false
 	}
-	return
+	return n.BranchRev, n.BranchPath, true
 }
 
 func (n *Node) Encode(encoder *Encoder) {
@@ -143,4 +149,24 @@ func (n *Node) Encode(encoder *Encoder) {
 	}
 
 	encoder.Newlines(n.newlines)
+}
+
+func (n *Node) GetData() []byte {
+	return n.data
+}
+
+func (n *Node) SetData(data []byte) error {
+	if n.Kind != NodeKindFile {
+		return fmt.Errorf("can't set data on a %s", n.Kind)
+	}
+
+	n.data = data
+
+	propLen, _ := n.Headers.Int(PropContentLengthHeader)
+	bodyLen := len(data)
+
+	n.Headers.Set(TextContentLengthHeader, fmt.Sprintf("%d", bodyLen))
+	n.Headers.Set(ContentLengthHeader, fmt.Sprintf("%d", propLen+bodyLen))
+
+	return nil
 }

@@ -38,7 +38,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	svn "github.com/kfsone/svn-go/lib"
@@ -51,33 +50,22 @@ const (
 	IterRev
 )
 
-type Status struct {
+type Session struct {
 	*svn.Repos
-	rules      *Rules
-	folderNews map[string]*svn.Node
-	folderAdds map[string]*svn.Node
-	branchNews map[string]*svn.Node
-	branchAdds map[string]*svn.Node
+	rules *Rules
+	tree  *Tree
 }
 
-func NewStatus() (status *Status, err error) {
-	status = &Status{
+func NewSession() (session *Session, err error) {
+	session = &Session{
 		Repos: svn.NewRepos(),
-		// The FIRST creation of every folder.
-		folderNews: make(map[string]*svn.Node),
-		// The LAST creation of every folder.
-		folderAdds: make(map[string]*svn.Node),
-		// The FIRST creation of every branch.
-		branchNews: make(map[string]*svn.Node),
-		// The LAST creation of every branch.
-		branchAdds: make(map[string]*svn.Node),
 	}
 
-	if status.rules, err = NewRules(*rulesFile); err != nil {
+	if session.rules, err = NewRules(*rulesFile); err != nil {
 		return nil, err
 	}
 
-	return status, nil
+	return session, nil
 }
 
 func main() {
@@ -119,7 +107,7 @@ func run() error {
 	}
 
 	// Prepare a repository view to load dumps into.
-	status, err := NewStatus()
+	session, err := NewSession()
 	if err != nil {
 		return err
 	}
@@ -134,32 +122,41 @@ func run() error {
 		if err := dumpfile.LoadRevisions(); err != nil {
 			return err
 		}
-		if err := status.AddDumpFile(dumpfile); err != nil {
+		if err := session.AddDumpFile(dumpfile); err != nil {
 			return err
 		}
 	}
 
-	if *pathInfo {
-		dumpPathInfo(status)
+	Info("Normalizing %d revisions", len(session.Revisions))
+	for _, rev := range session.Revisions {
+		processRevHelper(rev, session)
 	}
 
-	Info("Normalizing %d revisions", len(status.Revisions))
-	for _, rev := range status.Revisions {
-		processRevHelper(rev, status)
+	Info("Building Tree")
+	session.tree = NewTree()
+	for r := 1; r < len(session.Revisions); r++ {
+		rev := session.Revisions[r]
+		for _, node := range rev.Nodes {
+			err = session.tree.Insert(node)
+			if err != nil {
+				return err
+			}
+		}
 	}
 
-	Info("Analyzing")
-	if err = analyze(status); err != nil {
-		return err
+	if len(session.rules.RetroPaths) > 0 {
+		if err := retroFit(session); err != nil {
+			return err
+		}
 	}
 
 	if *outFilename != "" {
-		err = singleDump(*outFilename, status, 0, status.GetHead())
+		err = singleDump(*outFilename, session, 0, session.GetHead())
 		if err == nil {
 			fmt.Println("100% Complete")
 		}
 	} else if *outDir != "" {
-		err = multiDump(*outDir, status)
+		err = multiDump(*outDir, session)
 		if err == nil {
 			fmt.Println("100% Complete")
 		}
@@ -174,125 +171,23 @@ func run() error {
 	return nil
 }
 
-func must(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-func singleDump(filename string, status *Status, start, end int) error {
-	Info("Dumping r%9d:%9d -> %s", start, end, filename)
-
-	out, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		must(out.Close())
-	}()
-
-	enc := svn.NewEncoder(out)
-	defer enc.Close()
-
-	for progress := range status.Encode(enc, start, end) {
-		fmt.Printf("%5.2f%% r%d\r", progress.Percent, progress.Revision)
-	}
-	fmt.Printf("%6s %11s\r", "", "")
-
-	return nil
-}
-
-func multiDump(outPath string, status *Status) error {
-	// MkdirAll does nothing if the path already exists as a directory.
-	if err := os.MkdirAll(outPath, 0700); err != nil {
-		return err
-	}
-
-	for _, dumpfile := range status.DumpFiles {
-		dumpFilename := filepath.Join(outPath, filepath.Base(dumpfile.Filename))
-		start, end := dumpfile.Revisions[0].Number, dumpfile.Revisions[len(dumpfile.Revisions)-1].Number
-		if err := singleDump(dumpFilename, status, start, end); err != nil {
-			return err
-		}
-		if err := dumpfile.Close(); err != nil {
-			return fmt.Errorf("closing dump files: %w", err)
-		}
-		if *removeOriginals {
-			Log("-> Removing original dump file: %s", dumpfile.Filename)
-			if err := os.Remove(dumpfile.Filename); err != nil {
-				fmt.Printf("** error removing original dump file: %s\n", err)
-			}
-		}
-	}
-
-	return nil
-}
-
-func analyze(status *Status) error {
-	// Find branches that end up in a retrofit path but started out outside of it.
-	refits := 0
-	for refitNode := range getRefitBranches(status) {
-		oldRev, oldPath, _ := refitNode.Branched()
-		newPath := refitNode.Path()
-		Info("Refit: %s becomes %s at r%d", oldPath, newPath, oldRev)
-		refits++
-
-		// Work backwards until we find where this node was created, and replace any references to it with the new path.
-		refitRev := refitNode.Revision
-		for rno := refitRev.Number - 1; rno >= 0; rno-- {
-			rev := status.Revisions[rno]
-			creation := rev.FindNode(func(node *svn.Node) bool {
-				return node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionAdd && node.Path() == oldPath
-			})
-			replaceAll(oldPath, newPath, rev, status)
-
-			if creation != nil {
-				Info("| -> replaced creation at %d", rno)
-				creation.Headers.Set(svn.NodePathHeader, newPath)
-				break
-			}
-		}
-
-		// Remove the merge itself from later parent node.
-		if nodeNo := svn.Index(refitRev.Nodes, refitNode); nodeNo != -1 {
-			refitRev.Nodes = append(refitRev.Nodes[:nodeNo], refitRev.Nodes[nodeNo+1:]...)
-		} else {
-			panic("refit node has gone away")
-		}
-
-		// Now seek forward to find references to the old path
-		var deletionRemoved = false
-		for rno := refitRev.Number; rno < status.GetHead(); rno++ {
-			rev := status.Revisions[rno]
-			// Remove any attempts to delete the old branch.
-			deletion := svn.IndexFunc(rev.Nodes, func(node *svn.Node) bool {
-				return node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionDelete && node.Path() == oldPath
-			})
-			if deletion != -1 {
-				rev.Nodes = append(rev.Nodes[:deletion], rev.Nodes[deletion+1:]...)
-				deletionRemoved = true
-			}
-
-			replaceAll(oldPath, newPath, rev, status)
-
-			// stop once that folder is deleted.
-			if deletionRemoved {
-				break
-			}
-		}
-	}
-
-	if refits > 0 {
-		Info("%d branch refits required", refits)
-	} else {
-		Info("No branch refits required")
-	}
-
-	return nil
-}
+//func nodeTrace(session *Session, node *ModelNode) {
+//	fmt.Printf("Node: %s (r%d)\n", node.Path(), node.Revision.Number)
+//	for _, rev := range session.RevisionModels {
+//		if rev.Number > node.Revision.Number {
+//			break
+//		}
+//
+//		for _, prev := range rev.Nodes {
+//			if prev.Path() == node.Path() {
+//				fmt.Printf("  r%d: %s %s %s\n", prev.Revision.Number, *prev.Action, *prev.Kind, prev.Path())
+//			}
+//		}
+//	}
+//}
 
 // Replace all paths that begin with oldPath with newPath.
-func replaceAll(oldPath, newPath string, rev *svn.Revision, status *Status) {
+func replaceAll(oldPath, newPath string, rev *svn.Revision, session *Session) {
 	for _, node := range rev.Nodes {
 		nodePath := node.Path()
 		if changed := svn.ReplacePathPrefix(nodePath, oldPath, newPath); changed != nodePath {
@@ -310,7 +205,7 @@ func replaceAll(oldPath, newPath string, rev *svn.Revision, status *Status) {
 		}
 
 		oldBytes, newBytes := []byte(oldPath), []byte(newPath)
-		for _, prop := range status.rules.RetroProps {
+		for _, prop := range session.rules.RetroProps {
 			if value, ok := node.Properties.Get(prop); ok {
 				newVal := bytes.ReplaceAll(value, oldBytes, newBytes)
 				if !bytes.Equal(newVal, value) {
@@ -318,74 +213,5 @@ func replaceAll(oldPath, newPath string, rev *svn.Revision, status *Status) {
 				}
 			}
 		}
-	}
-}
-
-func getRefitBranches(status *Status) <-chan *svn.Node {
-	out := make(chan *svn.Node, 16)
-
-	go func() {
-		out := out
-		defer close(out)
-		for _, node := range status.branchAdds {
-			path := node.Path()
-			for _, prefix := range status.rules.RetroPaths {
-				if svn.MatchPathPrefix(path, prefix) {
-					_, branchPath, _ := node.Branched()
-					if !svn.MatchPathPrefix(branchPath, prefix) {
-						out <- node
-						break
-					}
-				}
-			}
-		}
-	}()
-
-	return out
-}
-
-func dumpPathInfo(status *Status) {
-	fmt.Printf("-- Path Info --\n")
-	originals := make(map[string]int)
-	finals := make(map[string]int)
-
-	for _, rev := range status.Revisions {
-		for _, node := range rev.Nodes {
-			if node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionAdd {
-				path := node.Path()
-				if _, present := originals[path]; !present {
-					originals[path] = rev.Number
-				}
-				finals[path] = rev.Number
-			}
-		}
-	}
-
-	if len(originals) == 0 {
-		fmt.Println("-- No directories created.")
-		return
-	}
-
-	paths := make([]string, 0, len(originals))
-	maxLen := 0
-	for path := range originals {
-		paths = append(paths, path)
-		if len(path) > maxLen {
-			maxLen = len(path)
-		}
-	}
-	sort.Strings(paths)
-
-	format := fmt.Sprintf("%%-%ds: %%s\n", maxLen)
-	for _, path := range paths {
-		original, final := originals[path], finals[path]
-		detail := ""
-		if original == final {
-			detail = fmt.Sprintf("r%d and done", original)
-		} else {
-			detail = fmt.Sprintf("r%d, ..., r%d", original, final)
-		}
-
-		fmt.Printf(format, path, detail)
 	}
 }

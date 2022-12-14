@@ -122,3 +122,11 @@ func (h *Headers) Encode(encoder *Encoder) {
 
 	encoder.Write(buffer)
 }
+
+func (h *Headers) Remove(key string) {
+	delete(h.table, key)
+	idx := Index(h.index, key)
+	if idx != -1 {
+		h.index = append(h.index[:idx], h.index[idx+1:]...)
+	}
+}

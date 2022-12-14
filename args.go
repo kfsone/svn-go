@@ -27,8 +27,13 @@ var outDir = flag.String("outdir", "", "specify a directory to write dump file(s
 // -remove-originals: remove the original dump files once they are regenerated. requires -outdir
 var removeOriginals = flag.Bool("remove-originals", false, "remove original dump files once they are regenerated. requires -outdir")
 
-// -pathinfo: displays a list of all the paths that are created (and when) in the dump.
-var pathInfo = flag.Bool("pathinfo", false, "display paths created in the loaded dump")
+// -fix-creations: fix any missing parent paths.
+var fixCreations = flag.Bool("fix-creations", false, "fix any missing parent paths")
+
+// - reduce the data size of any file containing > this many bytes to this size.
+var reduceData = flag.Int("reduce-data", -1, "reduce the data size of any file containing > this many bytes to this size")
+
+var doValidate = flag.Bool("validate", false, "validate the dump file(s)")
 
 func parseCommandLine() {
 	// Process command line flags.
@@ -49,6 +54,11 @@ func parseCommandLine() {
 
 	if *outFilename != "" && *outDir != "" {
 		fmt.Println("-outfile and -outdir are mutually exclusive")
+		os.Exit(1)
+	}
+
+	if *reduceData != -1 && *outFilename == "" && *outDir == "" {
+		fmt.Println("-reduce-data requires -outfile or -outdir")
 		os.Exit(1)
 	}
 

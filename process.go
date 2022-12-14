@@ -1,33 +1,59 @@
 package main
 
 import (
+	"crypto/md5"
+	"crypto/sha1"
 	"fmt"
-
 	svn "github.com/kfsone/svn-go/lib"
+	"sync"
 )
 
-func mapDirectoryCreations(rev *svn.Revision, status *Status) {
-	// Track when new directories are created, keeping both the first and last
-	// instance for each.
-	for _, node := range rev.Nodes {
-		if node.Kind == svn.NodeKindDir && node.Action == svn.NodeActionAdd {
-			var newDict *map[string]*svn.Node
-			path := node.Path()
-			// Track "last" creation of every dir/branch
-			_, _, branched := node.Branched()
-			if !branched { // creation
-				status.folderAdds[path] = node
-				newDict = &status.folderNews
-			} else {
-				status.branchAdds[path] = node
-				newDict = &status.branchNews
-			}
+var processWg sync.WaitGroup
 
-			// Track "first" creation of every dir/branch
-			if _, ok := (*newDict)[path]; !ok {
-				(*newDict)[path] = node
-			}
+// parsePropertiesWorker reads any properties in each revision and its nodes,
+// and expands them into a Properties object.
+func processRevHelper(rev *svn.Revision, session *Session) {
+	defer processWg.Wait()
+
+	// Shrink data.
+	if *reduceData >= 0 {
+		reduceNodeData(rev)
+	}
+	// Apply 'replace'.
+	applyReplace(rev, session.rules.Replace)
+
+	// Apply 'filter'.
+	applyFilter(rev, session.rules.Filter)
+
+	// Apply 'strip-props'.
+	applyStripProps(rev, session.rules.StripProps)
+}
+
+func reduceNodeData(rev *svn.Revision) {
+	for _, node := range rev.Nodes {
+		data := node.GetData()
+		if *reduceData == 0 {
+			node.Headers.Remove("Text-copy-source-md5")
+			node.Headers.Remove("Text-copy-source-sha1")
 		}
+		if data == nil || len(data) <= *reduceData {
+			continue
+		}
+		data = data[:*reduceData]
+		if err := node.SetData(data); err != nil {
+			panic(fmt.Errorf("reduce: setdata: %w", err))
+		}
+		if *reduceData == 0 {
+			node.Headers.Remove("Text-content-md5")
+			node.Headers.Remove("Text-content-sha1")
+			node.Headers.Remove("Text-content-length")
+			continue
+		}
+		var md5Sum, sha1Sum string
+		md5Sum = fmt.Sprintf("%x", md5.Sum(data))
+		sha1Sum = fmt.Sprintf("%x", sha1.Sum(data))
+		node.Headers.Set("Text-content-md5", md5Sum)
+		node.Headers.Set("Text-content-sha1", sha1Sum)
 	}
 }
 
@@ -38,12 +64,12 @@ func mapDirectoryCreations(rev *svn.Revision, status *Status) {
 // checks for out-of-bounds conditions like an attempt to delete such a directory,
 // since you just can't.
 func applyReplace(rev *svn.Revision, replacements map[string]string) {
+	deadNodes := make([]*svn.Node, 0)
+
 	// Apply 'replace' rules to the revision header.
 	rev.Properties.ApplyReplacements(replacements)
 
-	deadNodes := make([]*svn.Node, 0)
-
-	// And apply 'replace' rules to all of our revisions.
+	// Now to all of our revisions.
 	for _, node := range rev.Nodes {
 		// Fix the paths of every node in this revision.
 		path := node.Path()
@@ -61,7 +87,7 @@ func applyReplace(rev *svn.Revision, replacements map[string]string) {
 		}
 
 		// Did that bump us up to an invalid operation on root?
-		if changedPath && path == "" {
+		if changedPath && isRoot(path) {
 			if isChangedNodePathDefunct(node) {
 				deadNodes = append(deadNodes, node)
 			}
@@ -75,7 +101,7 @@ func applyReplace(rev *svn.Revision, replacements map[string]string) {
 		nodes := make([]*svn.Node, 0, len(rev.Nodes)-len(deadNodes))
 		for _, node := range rev.Nodes {
 			////TODO: Audit that we don't have references to removed nodes.
-			if node.Path() != "" {
+			if !isRoot(node.Path()) {
 				nodes = append(nodes, node)
 			}
 		}
@@ -107,22 +133,6 @@ func isChangedNodePathDefunct(node *svn.Node) bool {
 	}
 
 	return false
-}
-
-// parsePropertiesWorker reads any properties in each revision and its nodes,
-// and expands them into a Properties object.
-func processRevHelper(rev *svn.Revision, status *Status) {
-	// Apply 'replace'.
-	applyReplace(rev, status.rules.Replace)
-
-	// Find where all the directories are created.
-	mapDirectoryCreations(rev, status)
-
-	// Apply 'filter'.
-	applyFilter(rev, status.rules.Filter)
-
-	// Apply 'strip-props'.
-	applyStripProps(rev, status.rules.StripProps)
 }
 
 func applyFilter(rev *svn.Revision, filters []string) {
@@ -173,4 +183,8 @@ func applyStripProps(rev *svn.Revision, stripProps []StripProp) {
 			}
 		}
 	}
+}
+
+func isRoot(path string) bool {
+	return path == "" || path == "."
 }
