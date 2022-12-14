@@ -148,6 +148,12 @@ func run() error {
 		if err == nil {
 			fmt.Println("100% Complete")
 		}
+		for _, dumpfile := range session.DumpFiles {
+			if err := endDump(dumpfile); err != nil {
+				return err
+			}
+		}
+
 	} else if *outDir != "" {
 		err = multiDump(*outDir, session)
 		if err == nil {
@@ -163,3 +169,20 @@ func run() error {
 
 	return nil
 }
+
+func endDump(dumpfile *svn.DumpFile) error {
+	if err := dumpfile.Close(); err != nil {
+		return err
+	}
+	if !*removeOriginals {
+		return nil
+	}
+
+	Log("-> Removing original dump: %s", dumpfile.Filename)
+	if err := os.Remove(dumpfile.Filename); err != nil {
+		fmt.Printf("warning: removing original dump: %s\n", err)
+	}
+
+	return nil
+}
+

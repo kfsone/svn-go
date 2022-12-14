@@ -24,8 +24,8 @@ var outFilename = flag.String("outfile", "", "specify a single file/path to writ
 // -outdir: generate dump files in this directory.
 var outDir = flag.String("outdir", "", "specify a directory to write dump file(s) to")
 
-// -remove-originals: remove the original dump files once they are regenerated. requires -outdir
-var removeOriginals = flag.Bool("remove-originals", false, "remove original dump files once they are regenerated. requires -outdir")
+// -remove-originals: remove the original dump files once they are regenerated.
+var removeOriginals = flag.Bool("remove-originals", false, "remove original dump files once they are regenerated.")
 
 // - reduce the data size of any file containing > this many bytes to this size.
 var reduceData = flag.Int("reduce-data", -1, "reduce the data size of any file containing > this many bytes to this size")
@@ -57,8 +57,8 @@ func parseCommandLine() {
 		os.Exit(1)
 	}
 
-	if *removeOriginals && *outDir == "" {
-		fmt.Println("-remove-originals requires -outdir")
+	if *removeOriginals && *outFilename == "" && *outDir == "" {
+		fmt.Println("-remove-originals requires -outfile or --outdir")
 		os.Exit(1)
 	}
 

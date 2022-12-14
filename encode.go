@@ -49,14 +49,8 @@ func multiDump(outPath string, session *Session) error {
 		if err := singleDump(dumpFilename, session, start, end); err != nil {
 			return err
 		}
-		if err := dumpfile.Close(); err != nil {
-			return fmt.Errorf("closing dump files: %w", err)
-		}
-		if *removeOriginals {
-			Log("-> Removing original dump file: %s", dumpfile.Filename)
-			if err := os.Remove(dumpfile.Filename); err != nil {
-				fmt.Printf("** error removing original dump file: %s\n", err)
-			}
+		if err := endDump(dumpfile); err != nil {
+			return err
 		}
 	}
 
