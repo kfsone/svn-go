@@ -34,7 +34,6 @@ package main
 //
 
 import (
-	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -144,12 +143,6 @@ func run() error {
 		}
 	}
 
-	if len(session.rules.RetroPaths) > 0 {
-		if err := retroFit(session); err != nil {
-			return err
-		}
-	}
-
 	if *outFilename != "" {
 		err = singleDump(*outFilename, session, 0, session.GetHead())
 		if err == nil {
@@ -169,49 +162,4 @@ func run() error {
 	Info("Finished")
 
 	return nil
-}
-
-//func nodeTrace(session *Session, node *ModelNode) {
-//	fmt.Printf("Node: %s (r%d)\n", node.Path(), node.Revision.Number)
-//	for _, rev := range session.RevisionModels {
-//		if rev.Number > node.Revision.Number {
-//			break
-//		}
-//
-//		for _, prev := range rev.Nodes {
-//			if prev.Path() == node.Path() {
-//				fmt.Printf("  r%d: %s %s %s\n", prev.Revision.Number, *prev.Action, *prev.Kind, prev.Path())
-//			}
-//		}
-//	}
-//}
-
-// Replace all paths that begin with oldPath with newPath.
-func replaceAll(oldPath, newPath string, rev *svn.Revision, session *Session) {
-	for _, node := range rev.Nodes {
-		nodePath := node.Path()
-		if changed := svn.ReplacePathPrefix(nodePath, oldPath, newPath); changed != nodePath {
-			node.Headers.Set(svn.NodePathHeader, changed)
-		}
-
-		if _, branchPath, branched := node.Branched(); branched {
-			if changed := svn.ReplacePathPrefix(branchPath, oldPath, newPath); changed != branchPath {
-				node.Headers.Set(svn.NodeCopyfromPathHeader, branchPath)
-			}
-		}
-
-		if !node.Properties.HasKeyValues() {
-			continue
-		}
-
-		oldBytes, newBytes := []byte(oldPath), []byte(newPath)
-		for _, prop := range session.rules.RetroProps {
-			if value, ok := node.Properties.Get(prop); ok {
-				newVal := bytes.ReplaceAll(value, oldBytes, newBytes)
-				if !bytes.Equal(newVal, value) {
-					node.Properties.Set(prop, newVal)
-				}
-			}
-		}
-	}
 }

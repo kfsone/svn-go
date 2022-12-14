@@ -27,13 +27,8 @@ var outDir = flag.String("outdir", "", "specify a directory to write dump file(s
 // -remove-originals: remove the original dump files once they are regenerated. requires -outdir
 var removeOriginals = flag.Bool("remove-originals", false, "remove original dump files once they are regenerated. requires -outdir")
 
-// -fix-creations: fix any missing parent paths.
-var fixCreations = flag.Bool("fix-creations", false, "fix any missing parent paths")
-
 // - reduce the data size of any file containing > this many bytes to this size.
 var reduceData = flag.Int("reduce-data", -1, "reduce the data size of any file containing > this many bytes to this size")
-
-var doValidate = flag.Bool("validate", false, "validate the dump file(s)")
 
 func parseCommandLine() {
 	// Process command line flags.
